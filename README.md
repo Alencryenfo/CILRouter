@@ -1,21 +1,23 @@
-# CIL Router - 极简版 Claude API 转发器
+# CIL Router - 极简版 Claude Code API 转发器
 
 <div align="center">
 
-![GitHub](https://img.shields.io/github/license/your-username/cilrouter)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-framework-green.svg)
 
-**极简的 Claude API 转发器，专为替换 API Key 和透明转发设计**
+**极简的 Claude Code API 转发器，专为替换 API Key 和透明转发设计**
 
 [功能特性](#功能特性) • [快速开始](#快速开始) • [部署方式](#部署方式) • [API 文档](#api-文档) • [配置说明](#配置说明)
 
+[English](README_EN.md) | 简体中文
+
 </div>
 
-> 警告：使用本项目必须符合当地相关法规
+> 警告：使用本项目必须符合当地相关法规，其一切使用后果由用户自行承担
 > 
-> 本项目为个人使用构建开源~~水平菜菜~~，使用后果自负，欢迎PR增加功能
+> 本项目为个人使用构建开源~~水平菜菜~~，且大量AI编码,使用后果自负，欢迎PR增加功能
 
 ---
 
@@ -70,7 +72,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/your-username/cilrouter.git
+git clone https://github.com/alencryenfo/cilrouter.git
 cd cilrouter
 
 # 2. 配置环境变量
@@ -116,7 +118,7 @@ python app/main.py
 
 1. **克隆项目**
 ```bash
-git clone https://github.com/your-username/cilrouter.git
+git clone https://github.com/alencryenfo/cilrouter.git
 cd cilrouter
 ```
 
@@ -998,7 +1000,7 @@ CILRouter/
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/cilrouter.git
+git clone https://github.com/alencryenfo/cilrouter.git
 cd cilrouter
 
 # 创建虚拟环境
@@ -1276,8 +1278,8 @@ async def log_requests(request: Request, call_next):
 
 ## 📞 支持与反馈
 
-- **Issues**: [GitHub Issues](https://github.com/your-username/cilrouter/issues)
-- **讨论**: [GitHub Discussions](https://github.com/your-username/cilrouter/discussions)
+- **Issues**: [GitHub Issues](https://github.com/alencryenfo/cilrouter/issues)
+- **讨论**: [GitHub Discussions](https://github.com/alencryenfo/cilrouter/discussions)
 
 ---
 
