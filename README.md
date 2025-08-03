@@ -13,6 +13,10 @@
 
 </div>
 
+> 警告：使用本项目必须符合当地相关法规
+> 
+> 本项目为个人使用构建开源~~水平菜菜~~，使用后果自负，欢迎PR增加功能
+
 ---
 
 ## 📋 目录
@@ -1274,7 +1278,6 @@ async def log_requests(request: Request, call_next):
 
 - **Issues**: [GitHub Issues](https://github.com/your-username/cilrouter/issues)
 - **讨论**: [GitHub Discussions](https://github.com/your-username/cilrouter/discussions)
-- **邮箱**: your-email@example.com
 
 ---
 
