@@ -5,6 +5,8 @@ services:
     build: .
     ports:
       - "${PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
       # 服务器配置
       - HOST=${HOST:-0.0.0.0}
@@ -16,6 +18,9 @@ services:
       # 超时配置
       - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-60}
       - STREAM_TIMEOUT=${STREAM_TIMEOUT:-120}
+      
+      # 鉴权配置
+      - AUTH_KEY=${AUTH_KEY:-}
       
       # 供应商配置 (PROVIDER_N_* 格式)
       - PROVIDER_0_BASE_URL=${PROVIDER_0_BASE_URL:-}

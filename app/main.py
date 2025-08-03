@@ -7,6 +7,9 @@ CIL Router - 极简版 Claude API 转发器
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import Response, StreamingResponse
 import httpx
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
 
 # 创建 FastAPI 应用

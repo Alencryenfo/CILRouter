@@ -11,7 +11,7 @@ from typing import List, Dict, Any
 DEFAULT_PROVIDERS = [
     {
         "base_url": "https://co.yes.vg",
-        "api_key": "cr_11ff9f3a5aa317b8bd90d0053e2d0caeec53fc3a05c037ed2b14155e6a8da73d"  # 在这里填入你的 API Key
+        "api_key": ""  # 在这里填入你的 API Key
     },
     {
         "base_url": "https://api.provider2.com", 
