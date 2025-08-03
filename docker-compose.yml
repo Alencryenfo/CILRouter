@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  cilrouter:
+    build: .
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      # 服务器配置
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8000}
+      
+      # 当前供应商索引
+      - CURRENT_PROVIDER_INDEX=${CURRENT_PROVIDER_INDEX:-0}
+      
+      # 超时配置
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-60}
+      - STREAM_TIMEOUT=${STREAM_TIMEOUT:-120}
+      
+      # 供应商配置 (PROVIDER_N_* 格式)
+      - PROVIDER_0_BASE_URL=${PROVIDER_0_BASE_URL:-}
+      - PROVIDER_0_API_KEY=${PROVIDER_0_API_KEY:-}
+      - PROVIDER_1_BASE_URL=${PROVIDER_1_BASE_URL:-}
+      - PROVIDER_1_API_KEY=${PROVIDER_1_API_KEY:-}
+      - PROVIDER_2_BASE_URL=${PROVIDER_2_BASE_URL:-}
+      - PROVIDER_2_API_KEY=${PROVIDER_2_API_KEY:-}
+    
+    # 可选：挂载配置文件
+    volumes:
+      - ./config:/app/config:ro
+    
+    restart: unless-stopped
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
