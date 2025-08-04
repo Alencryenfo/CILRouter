@@ -11,9 +11,26 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
+from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
 
 # 创建 FastAPI 应用
-app = FastAPI(title="CIL Router", version="1.0.0")
+app = FastAPI(title="CIL Router", version="1.0.1")
+
+# 初始化限流器
+rate_limiter = None
+if config.is_rate_limit_enabled():
+    rate_limit_config = config.get_rate_limit_config()
+    rate_limiter = RateLimiter(
+        requests_per_minute=rate_limit_config["requests_per_minute"],
+        burst_size=rate_limit_config["burst_size"]
+    )
+    # 添加限流中间件
+    app.add_middleware(
+        RateLimitMiddleware,
+        rate_limiter=rate_limiter,
+        enabled=True,
+        trust_proxy=rate_limit_config["trust_proxy"]
+    )
 
 
 @app.post("/select")
@@ -52,14 +69,30 @@ async def select_provider(request: Request):
 @app.get("/")
 async def root():
     """根路径，返回当前状态"""
-    provider = config.get_current_provider()
+    current_provider_info = config.get_provider_info(config.current_provider_index)
     return {
         "app": "CIL Router",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "current_provider_index": config.current_provider_index,
         "total_providers": config.get_provider_count(),
-        "current_provider_url": provider["base_url"]
+        "current_provider_endpoints": current_provider_info.get("endpoints_count", 0),
+        "current_provider_urls": current_provider_info.get("base_urls", []),
+        "load_balancing": "round_robin"
     }
+
+
+@app.get("/providers")
+async def get_providers():
+    """获取所有供应商的详细信息"""
+    providers_info = config.get_all_providers_info()
+    # 隐藏API Key信息
+    for provider in providers_info:
+        provider.pop("api_keys", None)  # 完全移除API Key信息
+    return {
+        "current_provider_index": config.current_provider_index,
+        "providers": providers_info
+    }
+
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
@@ -82,8 +115,8 @@ async def forward_request(path: str, request: Request):
             if provided_key != config.get_auth_key():
                 # 鉴权失败，直接丢弃数据包，不返回任何响应
                 return
-        # 获取当前供应商配置
-        provider = config.get_current_provider()
+        # 获取当前供应商配置（使用负载均衡）
+        provider = config.get_current_provider_endpoint()
         if not provider["base_url"] or not provider["api_key"]:
             raise HTTPException(status_code=503, detail="供应商配置不完整")
         
@@ -116,8 +149,8 @@ async def forward_request(path: str, request: Request):
             # 处理流式请求
             return await _handle_streaming_request(method, target_url, headers, request)
         else:
-            # 处理普通请求
-            return await _handle_normal_request(method, target_url, headers, request)
+            # 处理普通请求（支持失败重试）
+            return await _handle_normal_request_with_retry(method, target_url, headers, request)
             
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"转发请求失败: {str(e)}")
@@ -147,19 +180,69 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
     return False
 
 
-async def _handle_normal_request(method: str, target_url: str, headers: dict, request: Request) -> Response:
+async def _handle_normal_request_with_retry(method: str, original_target_url: str, headers: dict, request: Request) -> Response:
     """
-    处理普通（非流式）请求
+    处理普通（非流式）请求，支持失败重试
     """
-    # 获取请求体
+    # 获取请求体（只读取一次）
     if method in ["POST", "PUT", "PATCH"]:
         body = await request.body()
     else:
         body = None
     
+    # 获取当前供应商的所有端点数量
+    current_provider_info = config.get_provider_info(config.current_provider_index)
+    max_retries = current_provider_info.get("endpoints_count", 1)
+    
+    last_exception = None
+    
+    for attempt in range(max_retries):
+        try:
+            # 为每次重试获取新的端点
+            if attempt > 0:
+                provider = config.get_current_provider_endpoint()
+                if not provider["base_url"] or not provider["api_key"]:
+                    continue
+                
+                # 更新请求头中的API Key 
+                headers["Authorization"] = f"Bearer {provider['api_key']}"
+                
+                # 重新构建URL
+                path = original_target_url.split('/', 3)[-1] if '/' in original_target_url else ""
+                base_url = provider['base_url'].rstrip('/')
+                target_url = f"{base_url}/{path}"
+            else:
+                target_url = original_target_url
+            
+            return await _handle_normal_request(method, target_url, headers, request, body, attempt + 1)
+            
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+            last_exception = e
+            print(f"⚠️ 请求失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt == max_retries - 1:
+                break
+            continue
+        except Exception as e:
+            # 其他类型的异常不重试
+            raise e
+    
+    # 所有重试都失败了
+    raise HTTPException(status_code=502, detail=f"所有端点都失败了: {str(last_exception)}")
+
+
+async def _handle_normal_request(method: str, target_url: str, headers: dict, request: Request, body: bytes = None, attempt: int = 1) -> Response:
+    """
+    处理普通（非流式）请求
+    """
+    # 如果没有提供body，则获取请求体
+    if body is None and method in ["POST", "PUT", "PATCH"]:
+        body = await request.body()
+    
     # 记录请求详情
-    print(f"🔄 转发请求: {method} {target_url}")
-    print(f"📤 请求头: {dict((k, v[:50] + '...' if len(v) > 50 else v) for k, v in headers.items())}")
+    retry_info = f" (重试 {attempt})" if attempt > 1 else ""
+    print(f"🔄 转发请求{retry_info}: {method} {target_url}")
+    if attempt == 1:  # 只在第一次尝试时显示详细头部信息
+        print(f"📤 请求头: {dict((k, v[:50] + '...' if len(v) > 50 else v) for k, v in headers.items())}")
     if body:
         body_preview = body.decode('utf-8', errors='ignore')[:200] + ('...' if len(body) > 200 else '')
         print(f"📤 请求体预览: {body_preview}")

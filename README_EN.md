@@ -54,6 +54,10 @@ English | [简体中文](README.md)
 - 🔑 **Smart API Key Handling** - Automatically detects and replaces Authorization header, adds if missing
 - 🌊 **Streaming Request Support** - Automatically detects and correctly handles streaming responses (like Claude's stream mode)
 - 🔄 **Manual Provider Switching** - Switch API providers in real-time via `/select` endpoint
+- ⚖️ **Load Balancing** - Automatic round-robin load balancing across multiple endpoints within the same provider
+- 🔁 **Failure Retry** - Automatic retry on other endpoints when one fails
+- 🛡️ **Smart Rate Limiting** - Token bucket algorithm-based IP rate limiting with burst traffic support
+- 🌏 **Cloudflare Support** - Complete CDN proxy support for accurate real client IP detection
 - 🚀 **Zero Configuration Startup** - Only requires configuring provider `base_url` and `api_key`
 - 📦 **Lightweight Design** - Only 3 core dependencies, extremely simple code
 
@@ -316,21 +320,29 @@ docker-compose -f docker-compose.prod.yml up -d
 |----------|---------|-------------|
 | `AUTH_KEY` | `` | API access key (optional) |
 
+#### Rate Limiting Configuration
+| Variable | Default | Description |
+|----------|---------|-----------|
+| `RATE_LIMIT_ENABLED` | `false` | Enable rate limiting functionality |
+| `RATE_LIMIT_RPM` | `100` | Requests per minute allowed |
+| `RATE_LIMIT_BURST` | `10` | Burst capacity (allows short-term excess over average rate) |
+| `RATE_LIMIT_TRUST_PROXY` | `true` | Whether to trust proxy headers for real IP (suitable for Cloudflare etc.) |
+
 #### Provider Configuration
-Provider configuration uses `PROVIDER_N_*` format, where N is a consecutive index starting from 0:
+Provider configuration uses `PROVIDER_N_*` format, supports multi-endpoint load balancing:
 
 ```bash
-# Provider 0
+# Provider 0 - Single endpoint
 PROVIDER_0_BASE_URL=https://api.anthropic.com
 PROVIDER_0_API_KEY=sk-ant-your-key-1
 
-# Provider 1
-PROVIDER_1_BASE_URL=https://api.provider2.com
-PROVIDER_1_API_KEY=your-key-2
+# Provider 1 - Multiple endpoints (comma-separated for load balancing)
+PROVIDER_1_BASE_URL=https://api.provider2.com,https://api2.provider2.com,https://backup.provider2.com
+PROVIDER_1_API_KEY=your-key-2a,your-key-2b,your-key-2c
 
-# Provider 2
-PROVIDER_2_BASE_URL=https://api.provider3.com
-PROVIDER_2_API_KEY=your-key-3
+# Provider 2 - Two endpoints
+PROVIDER_2_BASE_URL=https://api.provider3.com,https://api-backup.provider3.com
+PROVIDER_2_API_KEY=your-key-3a,your-key-3b
 
 # Continue adding more providers...
 ```
@@ -384,10 +396,12 @@ GET /
 ```json
 {
   "app": "CIL Router",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "current_provider_index": 0,
   "total_providers": 3,
-  "current_provider_url": "https://api.anthropic.com"
+  "current_provider_endpoints": 1,
+  "current_provider_urls": ["https://api.anthropic.com"],
+  "load_balancing": "round_robin"
 }
 ```
 
@@ -407,7 +421,7 @@ Content-Type: text/plain
 ```json
 {
   "success": true,
-  "message": "已切换到供应商 1",
+  "message": "Switched to provider 1",
   "current_index": 1,
   "total_providers": 3
 }
@@ -417,7 +431,7 @@ Content-Type: text/plain
 ```json
 {
   "success": false,
-  "message": "无效的供应商索引: 5. 有效范围: 0-2",
+  "message": "Invalid provider index: 5. Valid range: 0-2",
   "current_index": 0,
   "total_providers": 3
 }
@@ -747,6 +761,78 @@ curl -X POST http://localhost:8000/v1/messages \
 }
 ```
 
+### Rate Limiting (v1.0.1)
+
+CIL Router includes intelligent rate limiting based on token bucket algorithm.
+
+#### Rate Limiting Configuration
+
+```bash
+# Enable rate limiting
+RATE_LIMIT_ENABLED=true
+
+# Requests per minute
+RATE_LIMIT_RPM=100
+
+# Burst capacity
+RATE_LIMIT_BURST=10
+
+# Trust proxy headers for real IP detection
+RATE_LIMIT_TRUST_PROXY=true
+```
+
+#### Rate Limiting Features
+
+- **Token Bucket Algorithm** - Allows burst traffic while maintaining average rate
+- **Per-IP Limiting** - Independent rate limits for each client IP
+- **IPv4/IPv6 Support** - Full support for both IP versions
+- **Cloudflare Integration** - Automatic real IP detection through CF-Connecting-IP headers
+- **Automatic Cleanup** - Expired rate limit buckets are automatically cleaned up
+
+#### Rate Limiting Headers
+
+When rate limiting is active, responses include informational headers:
+
+```http
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 45
+X-RateLimit-Reset: 1640995200
+```
+
+#### Rate Limiting Error Response
+
+When rate limit is exceeded:
+
+```json
+{
+  "error": "Rate limit exceeded",
+  "message": "Too many requests from 192.168.1.1",
+  "requests_per_minute": 100,
+  "burst_size": 10,
+  "current_tokens": 0,
+  "retry_after": 60
+}
+```
+
+### Load Balancing (v1.0.1)
+
+Support for multiple endpoints within the same provider with automatic load balancing.
+
+#### Multi-Endpoint Configuration
+
+```bash
+# Provider with multiple endpoints
+PROVIDER_0_BASE_URL=https://api1.example.com,https://api2.example.com,https://api3.example.com
+PROVIDER_0_API_KEY=key1,key2,key3
+```
+
+#### Load Balancing Features
+
+- **Round-Robin Distribution** - Requests are distributed evenly across endpoints
+- **Automatic Failover** - Failed endpoints are automatically retried with other endpoints
+- **Independent API Keys** - Each endpoint can have its own API key
+- **Health Monitoring** - Failed endpoints are tracked and retried appropriately
+
 ### Health Check
 
 CIL Router has built-in health check functionality for containerized deployment and load balancers.
@@ -760,10 +846,12 @@ curl http://localhost:8000/
 # Response example
 {
   "app": "CIL Router",
-  "version": "1.0.0", 
+  "version": "1.0.1", 
   "current_provider_index": 0,
   "total_providers": 2,
-  "current_provider_url": "https://api.anthropic.com"
+  "current_provider_endpoints": 1,
+  "current_provider_urls": ["https://api.anthropic.com"],
+  "load_balancing": "round_robin"
 }
 ```
 
@@ -1232,7 +1320,19 @@ async def log_requests(request: Request, call_next):
 
 ## 📝 Changelog
 
-### v1.0.0 (Current Version)
+### v1.0.1 (Current Version)
+- ✅ Smart rate limiting based on token bucket algorithm
+- ✅ Burst traffic support with reasonable instantaneous peaks
+- ✅ IP-based request frequency control (full IPv4/IPv6 support)
+- ✅ Complete Cloudflare proxy support (CF-Connecting-IP, CF-IPCountry, etc.)
+- ✅ Configurable proxy trust mode (balance between security and practicality)
+- ✅ English error messages for user-friendly experience
+- ✅ Auto-expiring bucket cleanup mechanism to prevent memory leaks
+- ✅ Multi-endpoint load balancing for improved service availability
+- ✅ Automatic failure retry mechanism
+- ✅ Environment variable support for comma-separated multi-URL configuration
+
+### v1.0.0
 - ✅ Initial version release
 - ✅ Support for multi-provider configuration and switching
 - ✅ Complete environment variable configuration support
@@ -1243,7 +1343,6 @@ async def log_requests(request: Request, call_next):
 - ✅ Complete documentation and test coverage
 
 ### Planned Features
-- 🔄 Load balancing and failover
 - 📊 Request statistics and monitoring dashboard
 - 🔐 More authentication method support
 - 🌐 WebSocket support

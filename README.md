@@ -54,6 +54,10 @@
 - 🔑 **智能API Key处理** - 自动检测并替换Authorization头部，没有则添加
 - 🌊 **流式请求支持** - 自动检测并正确处理流式响应（如Claude的stream模式）
 - 🔄 **手动切换供应商** - 通过 `/select` 接口实时切换API供应商
+- ⚖️ **负载均衡** - 同供应商内多个端点自动轮询负载均衡
+- 🔁 **失败重试** - 端点失败时自动重试其他端点
+- 🛡️ **智能限流** - 基于令牌桶算法的IP限流，支持突发流量
+- 🌏 **Cloudflare支持** - 完整的CDN代理支持，准确获取真实客户端IP
 - 🚀 **零配置启动** - 只需配置供应商的 `base_url` 和 `api_key`
 - 📦 **轻量级设计** - 只有 3 个核心依赖包，代码极简
 
@@ -317,23 +321,31 @@ docker-compose -f docker-compose.prod.yml up -d
 | `AUTH_KEY` | `` | API访问密钥（可选） |
 
 #### 供应商配置
-供应商配置使用 `PROVIDER_N_*` 格式，其中 N 是从 0 开始的连续索引：
+供应商配置使用 `PROVIDER_N_*` 格式，支持多端点负载均衡：
 
 ```bash
-# 供应商 0
+# 供应商 0 - 单个端点
 PROVIDER_0_BASE_URL=https://api.anthropic.com
 PROVIDER_0_API_KEY=sk-ant-your-key-1
 
-# 供应商 1
-PROVIDER_1_BASE_URL=https://api.provider2.com
-PROVIDER_1_API_KEY=your-key-2
+# 供应商 1 - 多个端点（逗号分隔，实现负载均衡）
+PROVIDER_1_BASE_URL=https://api.provider2.com,https://api2.provider2.com,https://backup.provider2.com
+PROVIDER_1_API_KEY=your-key-2a,your-key-2b,your-key-2c
 
-# 供应商 2
-PROVIDER_2_BASE_URL=https://api.provider3.com
-PROVIDER_2_API_KEY=your-key-3
+# 供应商 2 - 两个端点
+PROVIDER_2_BASE_URL=https://api.provider3.com,https://api-backup.provider3.com
+PROVIDER_2_API_KEY=your-key-3a,your-key-3b
 
 # 可以继续添加更多供应商...
 ```
+
+#### 限流配置
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `RATE_LIMIT_ENABLED` | `false` | 是否启用限流功能 |
+| `RATE_LIMIT_RPM` | `100` | 每分钟允许的请求数 |
+| `RATE_LIMIT_BURST` | `10` | 突发容量（允许短时间内超过平均速率的请求数） |
+| `RATE_LIMIT_TRUST_PROXY` | `true` | 是否信任代理头部获取真实IP（适用于Cloudflare等CDN） |
 
 **注意事项：**
 - 索引必须从 0 开始且连续，不能有间断
@@ -384,10 +396,12 @@ GET /
 ```json
 {
   "app": "CIL Router",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "current_provider_index": 0,
   "total_providers": 3,
-  "current_provider_url": "https://api.anthropic.com"
+  "current_provider_endpoints": 1,
+  "current_provider_urls": ["https://api.anthropic.com"],
+  "load_balancing": "round_robin"
 }
 ```
 
@@ -1232,7 +1246,19 @@ async def log_requests(request: Request, call_next):
 
 ## 📝 更新日志
 
-### v1.0.0 (当前版本)
+### v1.0.1 (当前版本)
+- ✅ 基于令牌桶算法的智能限流
+- ✅ 支持突发流量处理，允许合理的瞬时高峰
+- ✅ 基于IP的请求频率控制（完整支持IPv4/IPv6）
+- ✅ 完整的Cloudflare代理支持（CF-Connecting-IP, CF-IPCountry等）
+- ✅ 可配置代理信任模式（安全性与实用性平衡）
+- ✅ 中文错误提示信息，用户体验友好
+- ✅ 自动过期bucket清理机制，防止内存泄露
+- ✅ 多端点负载均衡，提高服务可用性
+- ✅ 自动失败重试机制
+- ✅ 环境变量支持逗号分隔的多URL配置
+
+### v1.0.0
 - ✅ 初始版本发布
 - ✅ 支持多供应商配置和切换
 - ✅ 完整的环境变量配置支持
@@ -1243,10 +1269,9 @@ async def log_requests(request: Request, call_next):
 - ✅ 完整的文档和测试覆盖
 
 ### 计划功能
-- 🔄 负载均衡和故障转移
 - 📊 请求统计和监控面板
 - 🔐 更多鉴权方式支持
-- 🌐 WebSocket 支持
+- 🌐 WebSocket 支持  
 - 📈 性能优化和缓存
 
 ---
