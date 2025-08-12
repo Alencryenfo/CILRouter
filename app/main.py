@@ -599,7 +599,15 @@ async def _handle_streaming_request_with_retry(
                 await response.aclose()
                 await client.aclose()
                 return Response(content=data, status_code=status, headers=out_headers)
+            ctype = out_headers.get("content-type", "").lower()
+            is_sse = ctype.startswith("text/event-stream")
+            is_ndjson = "application/x-ndjson" in ctype
 
+            if not is_sse and not is_ndjson:
+                data = await response.aread()
+                await response.aclose()
+                await client.aclose()
+                return Response(content=data, status_code=status, headers=out_headers, media_type=ctype or None)
             # 2xx：开始真正流式转发
             media_type = out_headers.get("content-type", "text/event-stream")
             logger = get_logger()
@@ -615,6 +623,9 @@ async def _handle_streaming_request_with_retry(
                             yield chunk
                 except asyncio.CancelledError:
                     # 客户端断开，正常结束
+                    pass
+                except httpx.StreamClosed:
+                    # 上游提前关闭/已读完，按正常完成处理
                     pass
                 finally:
                     if logger and stream_content:
