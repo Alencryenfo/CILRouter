@@ -79,7 +79,7 @@ class CILRouterLogger:
         handler = logging.handlers.RotatingFileHandler(
             filename=log_file,
             maxBytes=3 * 1024 * 1024,  # 3MB
-            backupCount=10,  # 保留10个备份文件，总计约30MB
+            backupCount=8192,  # 保留10个备份文件，总计约30MB
             encoding='utf-8'
         )
         
