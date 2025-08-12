@@ -55,7 +55,8 @@ if config.is_rate_limit_enabled() or config.is_ip_block_enabled():
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 HOP_BY_HOP = {
     'connection', 'keep-alive', 'proxy-connection', 'upgrade',
-    'te', 'trailers',
+    'te', 'trailer',  # 注意这里用 trailer
+    'proxy-authenticate', 'proxy-authorization',
 }
 def _strip_hop_by_hop_resp(h: dict):
     for k in list(h.keys()):
@@ -498,8 +499,6 @@ async def _handle_normal_request_without_request(method: str, target_url: str, h
         if logger:
             logger.log_forward_response(response.status_code, dict(response.headers), response.content)
 
-        # 复制响应头部
-        response_headers = dict(response.headers)
 
         response_headers = dict(response.headers)
         _strip_hop_by_hop_resp(response_headers)
@@ -548,6 +547,9 @@ async def _handle_streaming_request_with_retry(
     base_headers = headers.copy()
 
     for attempt in range(max_retries):
+        client = None
+        response = None
+
         try:
             # 选端点 + 每次尝试使用 headers 副本，避免串味
             if attempt > 0:
@@ -558,13 +560,22 @@ async def _handle_streaming_request_with_retry(
             attempt_headers = base_headers.copy()
             attempt_headers["Authorization"] = f"Bearer {provider['api_key']}"
             target_url = build_target_url(provider["base_url"], forward_path, query)
-
-            client = httpx.AsyncClient(timeout=httpx.Timeout(config.get_stream_timeout()))
-            cm = client.stream(method=method, url=target_url, headers=attempt_headers, content=body)
-            response = await cm.__aenter__()
+            timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=None)
+            limits = httpx.Limits(max_connections=200, max_keepalive_connections=50)
+            client = httpx.AsyncClient(timeout=timeout, limits=limits)
+            try:
+                cm = client.stream(method=method, url=target_url, headers=attempt_headers, content=body)
+                response = await cm.__aenter__()  # 可能在此处抛出异常
+            except Exception:
+                # 关键修复：确保 __aenter__ 失败时关闭 client
+                if client is not None:
+                    try:
+                        await client.aclose()
+                    except Exception:
+                        pass
+                raise
 
             status = response.status_code
-            out_headers = dict(response.headers)
             out_headers = dict(response.headers)
             _strip_hop_by_hop_resp(out_headers)
 
@@ -653,21 +664,30 @@ async def _handle_streaming_request_with_retry(
             )
 
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.HTTPError) as e:
+            if response is not None:
+                try: await response.aclose()
+                except Exception: pass
+            if client is not None:
+                try: await client.aclose()
+                except Exception: pass
             last_err = e
             if attempt < max_retries - 1:
                 await asyncio.sleep(min(0.25 * (2 ** attempt), 2.0))
                 continue
             break
         except Exception as e:
+            if response is not None:
+                try: await response.aclose()
+                except Exception: pass
+            if client is not None:
+                try: await client.aclose()
+                except Exception: pass
             last_err = e
             break
 
     error_data = {"error": {"type": "api_error", "message": f"Stream failed: {str(last_err)}"}}
     return Response(content=(json.dumps(error_data, ensure_ascii=False) + "\n").encode(),
                     status_code=502, media_type="application/json")
-
-
-
 
 
 if __name__ == "__main__":

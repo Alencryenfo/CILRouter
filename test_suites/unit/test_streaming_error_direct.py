@@ -8,7 +8,7 @@
 import json
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch
-from app.main import _handle_streaming_request_with_body
+from app.main import _handle_streaming_request_with_retry
 from fastapi import Request
 
 
