@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 from fastapi import Request, Response
 
 # 模型回复字段预览长度
-MODEL_PREVIEW_LENGTH = 200
+MODEL_PREVIEW_LENGTH = 250
 
 
 def truncate_model_content(data: Any, limit: int = MODEL_PREVIEW_LENGTH) -> Any:
@@ -22,22 +22,67 @@ def truncate_model_content(data: Any, limit: int = MODEL_PREVIEW_LENGTH) -> Any:
     if not isinstance(data, dict):
         return data
 
-    choices = data.get("choices")
-    if not isinstance(choices, list):
-        return data
-
-    for choice in choices:
-        if not isinstance(choice, dict):
-            continue
-        message = choice.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str) and len(content) > limit:
-                message["content"] = content[:limit]
-        text = choice.get("text")
-        if isinstance(text, str) and len(text) > limit:
-            choice["text"] = text[:limit]
-    return data
+    # 创建数据副本以避免修改原始数据
+    result = data.copy()
+    
+    # 处理非流式响应格式（choices数组）
+    choices = result.get("choices")
+    if isinstance(choices, list):
+        # 创建choices数组的副本
+        result["choices"] = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                result["choices"].append(choice)
+                continue
+            
+            # 创建choice的副本
+            choice_copy = choice.copy()
+            
+            # 处理message.content字段
+            message = choice_copy.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and len(content) > limit:
+                    message_copy = message.copy()
+                    message_copy["content"] = content[:limit] + "...[truncated]"
+                    choice_copy["message"] = message_copy
+            
+            # 处理text字段
+            text = choice_copy.get("text")
+            if isinstance(text, str) and len(text) > limit:
+                choice_copy["text"] = text[:limit] + "...[truncated]"
+            
+            # 处理delta.content字段（流式响应中的choices）
+            delta = choice_copy.get("delta")
+            if isinstance(delta, dict):
+                content = delta.get("content")
+                if isinstance(content, str) and len(content) > limit:
+                    delta_copy = delta.copy()
+                    delta_copy["content"] = content[:limit] + "...[truncated]"
+                    choice_copy["delta"] = delta_copy
+            
+            result["choices"].append(choice_copy)
+    
+    # 处理流式响应格式（根级delta.content字段）
+    delta = result.get("delta")
+    if isinstance(delta, dict):
+        content = delta.get("content")
+        if isinstance(content, str) and len(content) > limit:
+            delta_copy = delta.copy()
+            delta_copy["content"] = content[:limit] + "...[truncated]"
+            result["delta"] = delta_copy
+    
+    # 处理直接的content字段（某些API格式）
+    content = result.get("content")
+    if isinstance(content, str) and len(content) > limit:
+        result["content"] = content[:limit] + "...[truncated]"
+    
+    # 处理text字段（某些API格式）
+    text = result.get("text")
+    if isinstance(text, str) and len(text) > limit:
+        result["text"] = text[:limit] + "...[truncated]"
+    
+    return result
 
 
 class UTC8Formatter(logging.Formatter):
