@@ -45,7 +45,7 @@ class RateLimiter:
         self.refill_rate = requests_per_minute / 60.0  # 每秒补充的令牌数
         self.buckets: Dict[str, TokenBucket] = {}
         self._lock = asyncio.Lock()
-        
+
         # 清理过期bucket的任务
         self._cleanup_task = None
         # 延迟启动清理任务，等到有事件循环时再启动
@@ -152,8 +152,22 @@ class RateLimiter:
             if bucket.tokens >= tokens_requested:
                 bucket.tokens -= tokens_requested
                 return True
-            
+
             return False
+
+    async def shutdown(self) -> None:
+        """停止清理任务并清空bucket"""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._cleanup_task = None
+        # 清理所有bucket释放内存
+        async with self._lock:
+            self.buckets.clear()
     
     async def get_bucket_status(self, key: str) -> Optional[Dict]:
         """

@@ -49,6 +49,16 @@ if config.is_rate_limit_enabled() or config.is_ip_block_enabled():
     )
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时清理资源"""
+    if 'rate_limiter' in globals() and rate_limiter:
+        try:
+            await rate_limiter.shutdown()
+        except Exception:
+            pass
+
+
 @app.post("/select")
 async def select_provider(request: Request):
     """
@@ -471,7 +481,9 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
         流式响应生成器
         """
         logger = get_logger()
-        stream_content = b""  # 收集所有流式内容用于日志记录
+        max_preview = 10 * 1024  # 仅保留前10KB用于日志
+        stream_preview = bytearray() if logger and logger.is_enabled() else None
+        total_bytes = 0
         
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(config.get_stream_timeout())) as client:
@@ -484,14 +496,17 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
                     # 流式传输响应内容
                     async for chunk in response.aiter_bytes():
                         if chunk:
-                            stream_content += chunk
+                            total_bytes += len(chunk)
+                            if stream_preview is not None and len(stream_preview) < max_preview:
+                                slice_end = min(len(chunk), max_preview - len(stream_preview))
+                                stream_preview.extend(chunk[:slice_end])
                             yield chunk
-                    
-                    # 流式传输完成后记录完整内容
-                    if logger and stream_content:
+
+                    # 流式传输完成后记录内容预览
+                    if logger and stream_preview:
                         try:
                             # 尝试解析为可读格式
-                            content_text = stream_content.decode('utf-8')
+                            content_text = stream_preview.decode('utf-8')
                             # 对于SSE流，清理格式以便阅读
                             if 'data: ' in content_text:
                                 # 提取所有的data字段
@@ -509,29 +524,29 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
                                     
                                     logger.debug("流式响应完成", {
                                         "type": "stream_response_complete",
-                                        "total_chunks": len(stream_content.split(b'data: ')),
+                                        "total_chunks": len(bytes(stream_preview).split(b'data: ')),
                                         "parsed_data": parsed_data[:5],  # 只记录前5个块避免日志过长
-                                        "total_bytes": len(stream_content)
+                                        "total_bytes": total_bytes
                                     })
                                 else:
                                     logger.debug("流式响应完成", {
-                                        "type": "stream_response_complete", 
+                                        "type": "stream_response_complete",
                                         "content_preview": content_text[:500] + "..." if len(content_text) > 500 else content_text,
-                                        "total_bytes": len(stream_content)
+                                        "total_bytes": total_bytes
                                     })
                             else:
                                 # 非SSE格式的流式响应
                                 logger.debug("流式响应完成", {
                                     "type": "stream_response_complete",
                                     "content_preview": content_text[:500] + "..." if len(content_text) > 500 else content_text,
-                                    "total_bytes": len(stream_content)
+                                    "total_bytes": total_bytes
                                 })
                         except UnicodeDecodeError:
                             # 二进制流式响应
                             logger.debug("流式响应完成", {
                                 "type": "stream_response_complete",
                                 "content_type": "binary",
-                                "total_bytes": len(stream_content)
+                                "total_bytes": total_bytes
                             })
         except Exception as e:
             # 记录流式响应错误
@@ -546,7 +561,7 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
             # 统一使用Claude API标准的错误格式
             error_data = {
                 "error": {
-                    "type": "api_error",
+                    "type": "stream_error",
                     "message": f"Stream connection failed: {str(e)}"
                 }
             }
