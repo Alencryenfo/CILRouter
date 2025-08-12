@@ -5,7 +5,6 @@ CIL Router 测试运行器
 提供便捷的测试执行命令，支持不同类型和级别的测试
 """
 
-import os
 import sys
 import subprocess
 import argparse
