@@ -560,7 +560,7 @@ async def _handle_streaming_request_with_retry(
             attempt_headers = base_headers.copy()
             attempt_headers["Authorization"] = f"Bearer {provider['api_key']}"
             target_url = build_target_url(provider["base_url"], forward_path, query)
-            timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=None)
+            timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
             limits = httpx.Limits(max_connections=200, max_keepalive_connections=50)
             client = httpx.AsyncClient(timeout=timeout, limits=limits)
             try:
@@ -613,6 +613,9 @@ async def _handle_streaming_request_with_retry(
                             if stream_content is not None:
                                 stream_content.extend(chunk)
                             yield chunk
+                except asyncio.CancelledError:
+                    # 客户端断开，正常结束
+                    pass
                 finally:
                     if logger and stream_content:
                         content_bytes = bytes(stream_content)
