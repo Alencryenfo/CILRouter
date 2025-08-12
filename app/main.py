@@ -16,7 +16,7 @@ from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
 from app.utils.logger import init_logger, get_logger
 
 # 创建 FastAPI 应用
-app = FastAPI(title="CIL Router", version="1.0.1")
+app = FastAPI(title="CIL Router", version="1.0.2")
 
 # 初始化日志模块
 log_config = config.get_log_config()
@@ -111,7 +111,7 @@ async def root():
     current_provider_info = config.get_provider_info(config.current_provider_index)
     return {
         "app": "CIL Router",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "current_provider_index": config.current_provider_index,
         "total_providers": config.get_provider_count(),
         "current_provider_endpoints": current_provider_info.get("endpoints_count", 0),

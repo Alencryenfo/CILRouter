@@ -22,11 +22,19 @@ services:
       # 鉴权配置
       - AUTH_KEY=${AUTH_KEY:-}
       
-      # 限流配置（v1.0.1新功能）
+      # 限流配置
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
       - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-100}
       - RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-10}
       - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-true}
+      
+      # IP阻止配置
+      - IP_BLOCK_ENABLED=${IP_BLOCK_ENABLED:-false}
+      - BLOCKED_IPS_FILE=${BLOCKED_IPS_FILE:-app/data/blocked_ips.json}
+      
+      # 日志配置
+      - LOG_LEVEL=${LOG_LEVEL:-NONE}
+      - LOG_DIR=${LOG_DIR:-app/data/log}
       
       # 供应商配置（支持逗号分隔的多端点负载均衡）
       - PROVIDER_0_BASE_URL=${PROVIDER_0_BASE_URL:-}
@@ -44,10 +52,11 @@ services:
       - PROVIDER_4_BASE_URL=${PROVIDER_4_BASE_URL:-}
       - PROVIDER_4_API_KEY=${PROVIDER_4_API_KEY:-}
     
-    # 挂载配置和日志目录
+    # 挂载配置和数据目录
     volumes:
       - ./config:/app/config:ro
       - ./logs:/app/logs:rw
+      - ./app/data:/app/app/data:rw
     
     # 重启策略
     restart: unless-stopped
