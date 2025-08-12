@@ -9,7 +9,8 @@ from fastapi.responses import Response, StreamingResponse
 import httpx
 import sys
 import os
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
@@ -121,7 +122,24 @@ async def get_providers():
     }
 
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
+@app.options("/{path:path}")
+async def cors_preflight(path: str, request: Request):
+    """
+    处理CORS预检请求，避免将OPTIONS请求转发到上游
+    """
+    allow_headers = request.headers.get("access-control-request-headers", "*")
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            "Access-Control-Allow-Headers": allow_headers,
+            "Access-Control-Max-Age": "600",
+        },
+    )
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "TRACE"])
 async def forward_request(path: str, request: Request):
     """
     通用转发接口
@@ -165,8 +183,9 @@ async def forward_request(path: str, request: Request):
         # 原始请求头拷贝并清洗
         headers = dict(request.headers)
 
-        # 强制上游不压缩，避免解压错位问题
-        headers.pop('accept-encoding', None)
+        # 强制上游不压缩，避免解压错位问题（处理大小写重复键）
+        for k in ('accept-encoding', 'Accept-Encoding'):
+            headers.pop(k, None)
         headers['Accept-Encoding'] = 'identity'
 
         # 移除逐跳头（hop-by-hop headers）
@@ -178,9 +197,16 @@ async def forward_request(path: str, request: Request):
             headers.pop(hk, None)
             headers.pop(hk.title(), None)
 
-        # 统一由我们注入认证
-        headers.pop('authorization', None)
-        headers.pop('Authorization', None)
+        # 清洗认证类头部，防止冲突
+        auth_headers = [
+            'authorization', 'Authorization', 'x-api-key', 'X-Api-Key', 
+            'api-key', 'Api-Key', 'x-authorization', 'X-Authorization',
+            'proxy-authorization', 'Proxy-Authorization'
+        ]
+        for hk in auth_headers:
+            headers.pop(hk, None)
+        
+        # 统一注入我们的认证
         headers["Authorization"] = f"Bearer {provider['api_key']}"
 
         # 目标URL（保留原 query）
@@ -329,7 +355,7 @@ async def _handle_normal_request(method: str, target_url: str, headers: dict, bo
             print(f"📥 响应状态: {response.status_code}")
             print(f"📥 响应头: {dict(response.headers)}")
 
-            # 如枟不是200，记录错误详情
+            # 如果不是200，记录错误详情
             if response.status_code != 200:
                 error_content = response.text[:500] + ('...' if len(response.text) > 500 else '')
                 print(f"❌ 错误响应内容: {error_content}")
@@ -348,12 +374,13 @@ async def _handle_normal_request(method: str, target_url: str, headers: dict, bo
         for hk in response_hop_headers:
             response_headers.pop(hk, None)
 
-        # 记录响应信息
+        # 记录响应信息，处理media_type大小写问题
+        content_type = response.headers.get("content-type") or response_headers.get("content-type")
         final_response = Response(
             content=response.content,
             status_code=response.status_code,
             headers=response_headers,
-            media_type=response_headers.get('content-type')
+            media_type=content_type
         )
         
         if logger:
@@ -453,7 +480,12 @@ async def _handle_streaming_request(method: str, target_url: str, headers: dict,
                     if response.status_code >= 400:
                         error_content = await response.aread()
                         error_text = error_content.decode('utf-8', errors='ignore')
-                        error_msg = f"data: {{\\\"error\\\": \\\"HTTP {response.status_code}: {error_text[:200]}...\\\", \\\"status_code\\\": {response.status_code}}}\\n\\n"
+                        msg = {
+                            "error": f"HTTP {response.status_code}",
+                            "detail": error_text[:200],
+                            "status_code": response.status_code
+                        }
+                        error_msg = f"data: {json.dumps(msg, ensure_ascii=False)}\\n\\n"
                         yield error_msg.encode()
                         return
                     
@@ -494,5 +526,4 @@ if __name__ == "__main__":
     print(f"🚀 启动 CIL Router 在 {server_config['host']}:{server_config['port']}")
     print(f"📡 配置了 {config.get_provider_count()} 个供应商")
     print(f"🎯 当前使用供应商 {config.current_provider_index}")
-    uvicorn.run(app, host=server_config['host'], port=server_config['port'],access_log=False, log_level="info")
-    print("✅ CIL Router 启动成功")
+    uvicorn.run(app, host=server_config['host'], port=server_config['port'],access_log=False)
