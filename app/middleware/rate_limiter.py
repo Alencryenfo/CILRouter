@@ -4,10 +4,12 @@
 支持基于IP的请求速率限制，允许突发流量
 """
 
+import json
 import time
 import asyncio
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from dataclasses import dataclass
+from pathlib import Path
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -32,6 +34,12 @@ class RateLimiter:
             requests_per_minute: 每分钟允许的请求数
             burst_size: 突发容量（允许短时间内超过平均速率的请求数）
         """
+        # 参数验证
+        if requests_per_minute <= 0:
+            raise ValueError("requests_per_minute 必须大于 0")
+        if burst_size <= 0:
+            raise ValueError("burst_size 必须大于 0")
+        
         self.requests_per_minute = requests_per_minute
         self.burst_size = burst_size
         self.refill_rate = requests_per_minute / 60.0  # 每秒补充的令牌数
@@ -47,6 +55,25 @@ class RateLimiter:
         if self._cleanup_task is None or self._cleanup_task.done():
             self._cleanup_task = asyncio.create_task(self._cleanup_expired_buckets())
     
+    def _sync_cleanup_if_needed(self):
+        """同步清理过期bucket（兜底机制）"""
+        try:
+            now = time.time()
+            expired_keys = []
+            
+            # 不使用异步锁，直接操作
+            for key, bucket in list(self.buckets.items()):
+                if now - bucket.last_refill > 600:  # 10分钟未使用
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                self.buckets.pop(key, None)
+            
+            if expired_keys:
+                print(f"🧹 同步清理了 {len(expired_keys)} 个过期的限流bucket")
+        except Exception as e:
+            print(f"❌ 同步清理bucket时出错: {e}")
+                    
     async def _cleanup_expired_buckets(self):
         """定期清理长时间未使用的bucket"""
         while True:
@@ -107,9 +134,9 @@ class RateLimiter:
         if self._cleanup_task is None:
             try:
                 self._start_cleanup_task()
-            except RuntimeError:
-                # 如果没有事件循环，跳过清理任务
-                pass
+            except (RuntimeError, AttributeError):
+                # 如果没有事件循环或其他异常，使用同步清理作为兜底
+                self._sync_cleanup_if_needed()
         
         async with self._lock:
             # 获取或创建bucket
@@ -190,11 +217,20 @@ class RateLimiter:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """FastAPI限流中间件"""
     
-    def __init__(self, app, rate_limiter: RateLimiter, enabled: bool = True, trust_proxy: bool = True):
+    def __init__(self, app, rate_limiter: RateLimiter, enabled: bool = True, trust_proxy: bool = True, 
+                 ip_block_enabled: bool = False, blocked_ips_file: str = "app/data/blocked_ips.json"):
         super().__init__(app)
         self.rate_limiter = rate_limiter
         self.enabled = enabled
         self.trust_proxy = trust_proxy
+        self.ip_block_enabled = ip_block_enabled
+        self.blocked_ips_file = blocked_ips_file
+        self._blocked_ips: List[str] = []
+        self._last_file_check = 0
+        
+        # 初始加载阻止IP列表
+        if self.ip_block_enabled:
+            self._load_blocked_ips()
     
     def _get_client_ip(self, request: Request) -> str:
         """获取客户端IP地址"""
@@ -210,9 +246,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if cf_connecting_ip and self._is_valid_ip(cf_connecting_ip.strip()):
             return cf_connecting_ip.strip()
         
-        # 2. CF-IPCountry 存在时，说明经过了 Cloudflare，但没有 CF-Connecting-IP
-        # 这种情况下应该检查 X-Forwarded-For
-        if request.headers.get("CF-IPCountry"):
+        # 2. CF-Ray 和 CF-IPCountry 等Cloudflare头部存在时，说明经过了Cloudflare
+        # 这种情况下应该优先检查 X-Forwarded-For
+        cloudflare_headers = ["CF-Ray", "CF-IPCountry", "CF-Visitor"]
+        if any(request.headers.get(header) for header in cloudflare_headers):
             forwarded_for = request.headers.get("X-Forwarded-For")
             if forwarded_for:
                 first_ip = forwarded_for.split(",")[0].strip()
@@ -247,6 +284,47 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         except (ValueError, ipaddress.AddressValueError):
             return False
     
+    def _load_blocked_ips(self) -> None:
+        """从文件加载阻止的IP列表"""
+        try:
+            blocked_ips_path = Path(self.blocked_ips_file)
+            if blocked_ips_path.exists():
+                with open(blocked_ips_path, 'r', encoding='utf-8') as f:
+                    self._blocked_ips = json.load(f)
+                self._last_file_check = time.time()
+                print(f"🔒 加载了 {len(self._blocked_ips)} 个阻止IP")
+            else:
+                self._blocked_ips = []
+                print(f"⚠️  阻止IP文件不存在: {blocked_ips_path}")
+        except Exception as e:
+            print(f"❌ 加载阻止IP列表时出错: {e}")
+            self._blocked_ips = []
+    
+    def _refresh_blocked_ips_if_needed(self) -> None:
+        """如果需要，刷新阻止IP列表（每60秒检查一次文件修改）"""
+        now = time.time()
+        if now - self._last_file_check > 60:  # 每60秒检查一次
+            try:
+                blocked_ips_path = Path(self.blocked_ips_file)
+                if blocked_ips_path.exists():
+                    file_mtime = blocked_ips_path.stat().st_mtime
+                    if file_mtime > self._last_file_check:
+                        self._load_blocked_ips()
+                else:
+                    self._last_file_check = now
+            except Exception as e:
+                print(f"❌ 检查阻止IP文件时出错: {e}")
+    
+    def _is_ip_blocked(self, ip: str) -> bool:
+        """检查IP是否被阻止"""
+        if not self.ip_block_enabled:
+            return False
+            
+        # 刷新阻止IP列表（如果需要）
+        self._refresh_blocked_ips_if_needed()
+        
+        return ip in self._blocked_ips
+    
     def _should_skip_rate_limit(self, request: Request) -> bool:
         """判断是否应该跳过限流检查"""
         # 所有请求都进行限流检查，不跳过任何路径
@@ -254,19 +332,58 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         """中间件处理逻辑"""
-        # 如果限流未启用，直接通过
-        if not self.enabled:
-            return await call_next(request)
-        
-        # 检查是否需要跳过限流
-        if self._should_skip_rate_limit(request):
-            return await call_next(request)
+        # 获取日志实例
+        logger = None
+        try:
+            from app.utils.logger import get_logger
+            logger = get_logger()
+        except (ImportError, Exception) as e:
+            # 记录导入失败但不影响功能
+            print(f"⚠️ 无法导入日志模块: {e}")
+            logger = None
         
         # 获取客户端IP
         client_ip = self._get_client_ip(request)
         
+        # 记录请求开始
+        if logger:
+            logger.log_request_start(request, client_ip)
+            # 避免在中间件中读取请求体，因为这会干扰后续处理
+            # 请求体记录将在主处理函数中完成
+            logger.log_request_body(b'')
+        
+        # 首先检查IP是否被阻止（优先级最高）
+        is_blocked = self._is_ip_blocked(client_ip)
+        if logger:
+            logger.log_ip_block(client_ip, is_blocked)
+        
+        if is_blocked:
+            # 被阻止的IP直接断开连接，不返回任何内容
+            from starlette.responses import Response
+            return Response(status_code=444)  # 444状态码：Connection Closed Without Response
+        
+        # 如果限流未启用，跳过限流检查
+        if not self.enabled:
+            response = await call_next(request)
+            if logger:
+                logger.log_response(response)
+            return response
+        
+        # 检查是否需要跳过限流
+        if self._should_skip_rate_limit(request):
+            response = await call_next(request)
+            if logger:
+                logger.log_response(response)
+            return response
+        
         # 检查是否允许请求
-        if not await self.rate_limiter.is_allowed(client_ip):
+        allowed = await self.rate_limiter.is_allowed(client_ip)
+        bucket_status = await self.rate_limiter.get_bucket_status(client_ip)
+        
+        if logger:
+            logger.log_rate_limit(client_ip, allowed, bucket_status)
+        
+        if not allowed:
             # 获取bucket状态用于返回剩余信息
             bucket_status = await self.rate_limiter.get_bucket_status(client_ip)
             
@@ -301,5 +418,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             response.headers["X-RateLimit-Limit"] = str(self.rate_limiter.requests_per_minute)
             response.headers["X-RateLimit-Remaining"] = str(int(bucket_status["tokens"]))
             response.headers["X-RateLimit-Reset"] = str(int(bucket_status["last_refill"]) + 60)
+        
+        # 记录响应
+        if logger:
+            logger.log_response(response)
         
         return response

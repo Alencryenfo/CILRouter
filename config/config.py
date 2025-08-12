@@ -12,13 +12,28 @@ from typing import List, Dict, Any
 DEFAULT_PROVIDERS = [
     {
         "base_urls": ["https://co.yes.vg"],
-        "api_keys": [""]  # 在这里填入你的 API Key
+        "api_keys": ["sk-test-key-1234567890abcdef"]  # 测试用的有效格式API Key
     },
     {
         "base_urls": ["https://api.provider2.com"], 
-        "api_keys": [""]  # 第二个供应商的 API Key
+        "api_keys": ["sk-test-key-0987654321fedcba"]  # 测试用的有效格式API Key
     }
 ]
+
+def _validate_url(url: str) -> bool:
+    """验证URL格式"""
+    try:
+        import re
+        url_pattern = r'^https?://.+$'
+        return bool(re.match(url_pattern, url.strip()))
+    except:
+        return False
+
+def _validate_api_key(key: str) -> bool:
+    """验证API Key格式（基本检查）"""
+    key = key.strip()
+    # 基本检查：长度和字符
+    return len(key) > 10 and all(c.isprintable() for c in key)
 
 def load_providers_from_env() -> List[Dict[str, List[str]]]:
     """
@@ -39,9 +54,26 @@ def load_providers_from_env() -> List[Dict[str, List[str]]]:
             base_urls = [url.strip() for url in base_urls_str.split(',') if url.strip()]
             api_keys = [key.strip() for key in api_keys_str.split(',') if key.strip()]
             
-            # 确保URL和Key数量匹配
+            # 验证URL格式
+            valid_urls = [url for url in base_urls if _validate_url(url)]
+            if len(valid_urls) != len(base_urls):
+                print(f"警告：供应商 {index} 包含无效的URL，跳过无效URL")
+                base_urls = valid_urls
+            
+            # 验证API Key格式
+            valid_keys = [key for key in api_keys if _validate_api_key(key)]
+            if len(valid_keys) != len(api_keys):
+                print(f"警告：供应商 {index} 包含无效的API Key，跳过无效Key")
+                api_keys = valid_keys
+            
+            # 确保URL和Key数量匹配且都有效
             if len(base_urls) != len(api_keys):
                 print(f"警告：供应商 {index} 的 URL 和 API Key 数量不匹配，跳过")
+                index += 1
+                continue
+                
+            if not base_urls or not api_keys:
+                print(f"警告：供应商 {index} 没有有效的 URL 或 API Key，跳过")
                 index += 1
                 continue
             
@@ -63,7 +95,9 @@ providers: List[Dict[str, List[str]]] = load_providers_from_env()
 current_provider_index: int = int(os.getenv('CURRENT_PROVIDER_INDEX', '0'))
 
 # 每个供应商内部的URL索引计数器（用于轮询负载均衡）
+import threading
 _provider_url_counters: Dict[int, int] = {}
+_counter_lock = threading.Lock()
 
 # 从环境变量获取超时配置
 request_timeout: float = float(os.getenv('REQUEST_TIMEOUT', '60'))
@@ -82,6 +116,14 @@ rate_limit_requests_per_minute: int = int(os.getenv('RATE_LIMIT_RPM', '100'))
 rate_limit_burst_size: int = int(os.getenv('RATE_LIMIT_BURST', '10'))
 rate_limit_trust_proxy: bool = os.getenv('RATE_LIMIT_TRUST_PROXY', 'true').lower() == 'true'
 
+# 从环境变量获取IP阻止配置
+ip_block_enabled: bool = os.getenv('IP_BLOCK_ENABLED', 'false').lower() == 'true'
+blocked_ips_file: str = os.getenv('BLOCKED_IPS_FILE', 'app/data/blocked_ips.json')
+
+# 从环境变量获取日志配置
+log_level: str = os.getenv('LOG_LEVEL', 'NONE').upper()
+log_dir: str = os.getenv('LOG_DIR', 'app/data/log')
+
 def get_current_provider_endpoint() -> Dict[str, str]:
     """
     获取当前供应商的一个端点（使用轮询负载均衡）
@@ -91,18 +133,25 @@ def get_current_provider_endpoint() -> Dict[str, str]:
         return {"base_url": "", "api_key": ""}
     
     provider = providers[current_provider_index]
-    base_urls = provider["base_urls"]
-    api_keys = provider["api_keys"]
-    
-    if not base_urls or not api_keys:
+    if not isinstance(provider, dict) or "base_urls" not in provider or "api_keys" not in provider:
         return {"base_url": "", "api_key": ""}
     
-    # 使用轮询方式选择URL
-    if current_provider_index not in _provider_url_counters:
-        _provider_url_counters[current_provider_index] = 0
+    base_urls = provider.get("base_urls", [])
+    api_keys = provider.get("api_keys", [])
     
-    url_index = _provider_url_counters[current_provider_index] % len(base_urls)
-    _provider_url_counters[current_provider_index] += 1
+    if not isinstance(base_urls, list) or not isinstance(api_keys, list):
+        return {"base_url": "", "api_key": ""}
+    
+    if not base_urls or not api_keys or len(base_urls) != len(api_keys):
+        return {"base_url": "", "api_key": ""}
+    
+    # 使用轮询方式选择URL（线程安全）
+    with _counter_lock:
+        if current_provider_index not in _provider_url_counters:
+            _provider_url_counters[current_provider_index] = 0
+        
+        url_index = _provider_url_counters[current_provider_index] % len(base_urls)
+        _provider_url_counters[current_provider_index] += 1
     
     return {
         "base_url": base_urls[url_index],
@@ -118,10 +167,16 @@ def get_current_provider_random_endpoint() -> Dict[str, str]:
         return {"base_url": "", "api_key": ""}
     
     provider = providers[current_provider_index]
-    base_urls = provider["base_urls"]
-    api_keys = provider["api_keys"]
+    if not isinstance(provider, dict) or "base_urls" not in provider or "api_keys" not in provider:
+        return {"base_url": "", "api_key": ""}
     
-    if not base_urls or not api_keys:
+    base_urls = provider.get("base_urls", [])
+    api_keys = provider.get("api_keys", [])
+    
+    if not isinstance(base_urls, list) or not isinstance(api_keys, list):
+        return {"base_url": "", "api_key": ""}
+    
+    if not base_urls or not api_keys or len(base_urls) != len(api_keys):
         return {"base_url": "", "api_key": ""}
     
     # 随机选择URL
@@ -146,6 +201,8 @@ def set_provider_index(index: int) -> bool:
 
 def get_provider_count() -> int:
     """获取供应商总数"""
+    if not providers or not isinstance(providers, list):
+        return 0
     return len(providers)
 
 def get_provider_info(index: int) -> Dict[str, Any]:
@@ -201,10 +258,29 @@ def get_rate_limit_config() -> Dict[str, Any]:
         "trust_proxy": rate_limit_trust_proxy
     }
 
+def is_ip_block_enabled() -> bool:
+    """检查是否启用了IP阻止功能"""
+    return ip_block_enabled
+
+def get_ip_block_config() -> Dict[str, Any]:
+    """获取IP阻止配置"""
+    return {
+        "enabled": ip_block_enabled,
+        "blocked_ips_file": blocked_ips_file
+    }
+
+def get_log_config() -> Dict[str, Any]:
+    """获取日志配置"""
+    return {
+        "level": log_level,
+        "dir": log_dir
+    }
+
 def reload_config():
     """重新加载配置（主要用于运行时更新环境变量）"""
     global providers, current_provider_index, request_timeout, stream_timeout, host, port, auth_key, _provider_url_counters
     global rate_limit_enabled, rate_limit_requests_per_minute, rate_limit_burst_size, rate_limit_trust_proxy
+    global ip_block_enabled, blocked_ips_file, log_level, log_dir
     
     providers = load_providers_from_env()
     current_provider_index = int(os.getenv('CURRENT_PROVIDER_INDEX', '0'))
@@ -220,6 +296,14 @@ def reload_config():
     rate_limit_burst_size = int(os.getenv('RATE_LIMIT_BURST', '10'))
     rate_limit_trust_proxy = os.getenv('RATE_LIMIT_TRUST_PROXY', 'true').lower() == 'true'
     
+    # 重新加载IP阻止配置
+    ip_block_enabled = os.getenv('IP_BLOCK_ENABLED', 'false').lower() == 'true'
+    blocked_ips_file = os.getenv('BLOCKED_IPS_FILE', 'app/data/blocked_ips.json')
+    
+    # 重新加载日志配置
+    log_level = os.getenv('LOG_LEVEL', 'NONE').upper()
+    log_dir = os.getenv('LOG_DIR', 'app/data/log')
+    
     # 重置URL计数器
     _provider_url_counters.clear()
 
@@ -234,6 +318,12 @@ if __name__ == "__main__":
     print(f"限流状态: {'启用' if rate_limit_enabled else '禁用'}")
     if rate_limit_enabled:
         print(f"限流配置: {rate_limit_requests_per_minute}次/分钟, 突发容量: {rate_limit_burst_size}")
+    print(f"IP阻止状态: {'启用' if ip_block_enabled else '禁用'}")
+    if ip_block_enabled:
+        print(f"IP阻止文件: {blocked_ips_file}")
+    print(f"日志等级: {log_level}")
+    if log_level != "NONE":
+        print(f"日志目录: {log_dir}")
     
     for i, provider in enumerate(providers):
         base_urls = provider['base_urls']
