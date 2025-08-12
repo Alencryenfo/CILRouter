@@ -61,7 +61,7 @@ HOP_BY_HOP = {
 def _strip_hop_by_hop_resp(h: dict):
     for k in list(h.keys()):
         kl = k.lower()
-        if kl in HOP_BY_HOP or kl in {'content-length','transfer-encoding'}:
+        if kl in HOP_BY_HOP or kl in {'content-length','transfer-encoding','content-encoding'}:
             h.pop(k, None)
 def _strip_hop_by_hop(h: dict):
     for k in list(h.keys()):
@@ -309,7 +309,7 @@ async def forward_request(path: str, request: Request):
         for k in ['host', 'content-length', 'transfer-encoding']:
             headers.pop(k, None)
         _strip_hop_by_hop(headers)
-
+        headers["accept-encoding"] = "identity"
         # 智能处理API Key：移除所有现有的认证头部，然后添加供应商的
         headers.pop('authorization', None)
         headers.pop('Authorization', None)
@@ -420,6 +420,7 @@ async def _handle_normal_request_with_retry_and_body(
 
             attempt_headers = base_headers.copy()
             attempt_headers["Authorization"] = f"Bearer {provider['api_key']}"
+            attempt_headers["Accept-Encoding"] = "identity"
             target_url = build_target_url(provider['base_url'], forward_path, query)
 
             # 发起一次请求（里层函数保持原有打印/日志逻辑）
@@ -559,6 +560,7 @@ async def _handle_streaming_request_with_retry(
 
             attempt_headers = base_headers.copy()
             attempt_headers["Authorization"] = f"Bearer {provider['api_key']}"
+            attempt_headers["Accept-Encoding"] = "identity"
             target_url = build_target_url(provider["base_url"], forward_path, query)
             timeout = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
             limits = httpx.Limits(max_connections=200, max_keepalive_connections=50)
@@ -616,7 +618,7 @@ async def _handle_streaming_request_with_retry(
             async def gen():
                 nonlocal stream_content
                 try:
-                    async for chunk in response.aiter_bytes():
+                    async for chunk in response.aiter_raw():
                         if chunk:
                             if stream_content is not None:
                                 stream_content.extend(chunk)
