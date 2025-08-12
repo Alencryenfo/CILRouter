@@ -203,6 +203,17 @@ class RateLimiter:
                 "burst_size": self.burst_size,
                 "buckets": buckets_info
             }
+
+    async def shutdown(self) -> None:
+        """停止清理任务并释放资源"""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+        self.buckets.clear()
     
     def get_config(self) -> Dict:
         """获取限流器配置"""
