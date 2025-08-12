@@ -13,6 +13,32 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import Request, Response
 
+# 模型回复字段预览长度
+MODEL_PREVIEW_LENGTH = 200
+
+
+def truncate_model_content(data: Any, limit: int = MODEL_PREVIEW_LENGTH) -> Any:
+    """截断模型回复字段以限制日志体积"""
+    if not isinstance(data, dict):
+        return data
+
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return data
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str) and len(content) > limit:
+                message["content"] = content[:limit]
+        text = choice.get("text")
+        if isinstance(text, str) and len(text) > limit:
+            choice["text"] = text[:limit]
+    return data
+
 
 class UTC8Formatter(logging.Formatter):
     """UTC+8时区的日志格式器"""
@@ -63,7 +89,9 @@ class CILRouterLogger:
         
         # 创建logger
         self.logger = logging.getLogger("cilrouter")
-        self.logger.handlers.clear()  # 清除已存在的handler
+        for handler in list(self.logger.handlers):
+            handler.close()
+            self.logger.removeHandler(handler)
         
         # 设置日志等级
         level_map = {
@@ -74,12 +102,12 @@ class CILRouterLogger:
         }
         self.logger.setLevel(level_map.get(self.log_level, logging.DEBUG))
         
-        # 创建轮转文件处理器 (3MB轮转)
+        # 创建轮转文件处理器 (12MB轮转，最多8192份)
         log_file = self.log_dir / "cilrouter.log"
         handler = logging.handlers.RotatingFileHandler(
             filename=log_file,
-            maxBytes=3 * 1024 * 1024,  # 3MB
-            backupCount=8192,  # 保留10个备份文件，总计约30MB
+            maxBytes=12 * 1024 * 1024,  # 12MB
+            backupCount=8192,
             encoding='utf-8'
         )
         
@@ -236,7 +264,7 @@ class CILRouterLogger:
                     # 尝试解析为JSON
                     try:
                         body_json = json.loads(body_text)
-                        response_data["body"] = body_json
+                        response_data["body"] = truncate_model_content(body_json)
                     except json.JSONDecodeError:
                         response_data["body"] = body_text
                 else:
@@ -267,7 +295,7 @@ class CILRouterLogger:
                     body_text = body.decode('utf-8')
                     try:
                         body_json = json.loads(body_text)
-                        forward_data["body"] = body_json
+                        forward_data["body"] = truncate_model_content(body_json)
                     except json.JSONDecodeError:
                         forward_data["body"] = body_text
                 else:
@@ -296,7 +324,7 @@ class CILRouterLogger:
                     body_text = body.decode('utf-8')
                     try:
                         body_json = json.loads(body_text)
-                        response_data["body"] = body_json
+                        response_data["body"] = truncate_model_content(body_json)
                     except json.JSONDecodeError:
                         response_data["body"] = body_text
                 else:

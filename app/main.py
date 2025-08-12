@@ -10,10 +10,12 @@ import httpx
 import json
 import sys
 import os
+from typing import Optional
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
-from app.utils.logger import init_logger, get_logger
+from app.utils.logger import init_logger, get_logger, truncate_model_content
 
 # 创建 FastAPI 应用
 app = FastAPI(title="CIL Router", version="1.0.2")
@@ -25,10 +27,10 @@ init_logger(log_level=log_config["level"], log_dir=log_config["dir"])
 # 初始化限流器和中间件
 rate_limit_config = config.get_rate_limit_config()
 ip_block_config = config.get_ip_block_config()
+rate_limiter: Optional[RateLimiter] = None
 
 # 如果限流或IP阻止任一功能启用，就添加中间件
 if config.is_rate_limit_enabled() or config.is_ip_block_enabled():
-    rate_limiter = None
     if config.is_rate_limit_enabled():
         rate_limiter = RateLimiter(
             requests_per_minute=rate_limit_config["requests_per_minute"],
@@ -37,7 +39,7 @@ if config.is_rate_limit_enabled() or config.is_ip_block_enabled():
     else:
         # 即使不限流，也需要一个虚拟的限流器
         rate_limiter = RateLimiter(requests_per_minute=999999, burst_size=999999)
-    
+
     # 添加中间件
     app.add_middleware(
         RateLimitMiddleware,
@@ -47,6 +49,12 @@ if config.is_rate_limit_enabled() or config.is_ip_block_enabled():
         ip_block_enabled=ip_block_config["enabled"],
         blocked_ips_file=ip_block_config["blocked_ips_file"]
     )
+
+
+@app.on_event("shutdown")
+async def _shutdown_event() -> None:
+    if rate_limiter:
+        await rate_limiter.shutdown()
 
 
 @app.post("/select")
@@ -471,7 +479,8 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
         流式响应生成器
         """
         logger = get_logger()
-        stream_content = b""  # 收集所有流式内容用于日志记录
+        # 如果启用了日志，累积完整的流式内容以便记录
+        stream_content = bytearray() if logger else None
         
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(config.get_stream_timeout())) as client:
@@ -484,55 +493,55 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
                     # 流式传输响应内容
                     async for chunk in response.aiter_bytes():
                         if chunk:
-                            stream_content += chunk
+                            if stream_content is not None:
+                                stream_content.extend(chunk)
                             yield chunk
-                    
+
                     # 流式传输完成后记录完整内容
                     if logger and stream_content:
+                        content_bytes = bytes(stream_content)
                         try:
-                            # 尝试解析为可读格式
-                            content_text = stream_content.decode('utf-8')
-                            # 对于SSE流，清理格式以便阅读
-                            if 'data: ' in content_text:
-                                # 提取所有的data字段
+                            # 尝试解析为文本
+                            content_text = content_bytes.decode('utf-8')
+
+                            if 'data:' in content_text:
+                                # SSE格式，截断每个data块中的模型回复
                                 import re
-                                data_matches = re.findall(r'data: (.*?)\n\n', content_text, re.DOTALL)
-                                if data_matches:
-                                    # 尝试解析每个data块
-                                    parsed_data = []
-                                    for data_match in data_matches:
-                                        try:
-                                            parsed_json = json.loads(data_match)
-                                            parsed_data.append(parsed_json)
-                                        except json.JSONDecodeError:
-                                            parsed_data.append(data_match)
-                                    
-                                    logger.debug("流式响应完成", {
-                                        "type": "stream_response_complete",
-                                        "total_chunks": len(stream_content.split(b'data: ')),
-                                        "parsed_data": parsed_data[:5],  # 只记录前5个块避免日志过长
-                                        "total_bytes": len(stream_content)
-                                    })
-                                else:
-                                    logger.debug("流式响应完成", {
-                                        "type": "stream_response_complete", 
-                                        "content_preview": content_text[:500] + "..." if len(content_text) > 500 else content_text,
-                                        "total_bytes": len(stream_content)
-                                    })
+
+                                def _truncate_match(match):
+                                    data_json = match.group(1)
+                                    try:
+                                        parsed = json.loads(data_json)
+                                        truncated = truncate_model_content(parsed)
+                                        return f"data: {json.dumps(truncated, ensure_ascii=False)}\\n\\n"
+                                    except json.JSONDecodeError:
+                                        return match.group(0)
+
+                                content_text = re.sub(r'data: (.*?)\\n\\n', _truncate_match, content_text, flags=re.DOTALL)
                             else:
-                                # 非SSE格式的流式响应
-                                logger.debug("流式响应完成", {
-                                    "type": "stream_response_complete",
-                                    "content_preview": content_text[:500] + "..." if len(content_text) > 500 else content_text,
-                                    "total_bytes": len(stream_content)
-                                })
+                                # 非SSE格式，直接尝试截断模型回复字段
+                                try:
+                                    parsed = json.loads(content_text)
+                                    truncated = truncate_model_content(parsed)
+                                    content_text = json.dumps(truncated, ensure_ascii=False)
+                                except json.JSONDecodeError:
+                                    pass
+
+                            logger.debug("流式响应完成", {
+                                "type": "stream_response_complete",
+                                "content": content_text,
+                                "total_bytes": len(content_bytes)
+                            })
                         except UnicodeDecodeError:
                             # 二进制流式响应
                             logger.debug("流式响应完成", {
                                 "type": "stream_response_complete",
                                 "content_type": "binary",
-                                "total_bytes": len(stream_content)
+                                "total_bytes": len(content_bytes)
                             })
+                        finally:
+                            # 删除缓冲区以释放内存
+                            del stream_content
         except Exception as e:
             # 记录流式响应错误
             if logger:
