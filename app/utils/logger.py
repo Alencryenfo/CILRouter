@@ -85,6 +85,67 @@ def truncate_model_content(data: Any, limit: int = MODEL_PREVIEW_LENGTH) -> Any:
     return result
 
 
+def truncate_request_content(data: Any, limit: int = MODEL_PREVIEW_LENGTH) -> Any:
+    """截断请求体中的文本提示词，只截断用户输入的content，保留其他字段"""
+    if not isinstance(data, dict):
+        return data
+    
+    # 创建数据副本以避免修改原始数据
+    result = data.copy()
+    
+    # 处理messages数组中的content字段
+    messages = result.get("messages")
+    if isinstance(messages, list):
+        result["messages"] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                result["messages"].append(message)
+                continue
+            
+            message_copy = message.copy()
+            content = message_copy.get("content")
+            
+            # 只截断文本content，保留其他类型的content（如图片等）
+            if isinstance(content, str) and len(content) > limit:
+                message_copy["content"] = content[:limit] + "...[truncated]"
+            elif isinstance(content, list):
+                # 处理多模态content（包含text和image等）
+                truncated_content = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text = item.get("text", "")
+                        if isinstance(text, str) and len(text) > limit:
+                            item_copy = item.copy()
+                            item_copy["text"] = text[:limit] + "...[truncated]"
+                            truncated_content.append(item_copy)
+                        else:
+                            truncated_content.append(item)
+                    else:
+                        # 保留非文本项（如图片等）
+                        truncated_content.append(item)
+                message_copy["content"] = truncated_content
+            
+            result["messages"].append(message_copy)
+    
+    # 处理其他可能包含大量文本的字段
+    # system prompt
+    system = result.get("system")
+    if isinstance(system, str) and len(system) > limit:
+        result["system"] = system[:limit] + "...[truncated]"
+    
+    # prompt字段（某些API使用）
+    prompt = result.get("prompt")
+    if isinstance(prompt, str) and len(prompt) > limit:
+        result["prompt"] = prompt[:limit] + "...[truncated]"
+    
+    # input字段（某些API使用）
+    input_text = result.get("input")
+    if isinstance(input_text, str) and len(input_text) > limit:
+        result["input"] = input_text[:limit] + "...[truncated]"
+    
+    return result
+
+
 class UTC8Formatter(logging.Formatter):
     """UTC+8时区的日志格式器"""
     
@@ -274,9 +335,16 @@ class CILRouterLogger:
                 # 尝试解析为JSON，如果失败就记录原始文本
                 try:
                     body_json = json.loads(body_text)
-                    body_data = {"type": "request_body", "body": body_json}
+                    # 对JSON请求体中的文本内容应用截断逻辑
+                    truncated_body = truncate_request_content(body_json)
+                    body_data = {"type": "request_body", "body": truncated_body}
                 except json.JSONDecodeError:
-                    body_data = {"type": "request_body", "body": body_text}
+                    # 对原始文本应用长度限制
+                    if len(body_text) > MODEL_PREVIEW_LENGTH:
+                        truncated_text = body_text[:MODEL_PREVIEW_LENGTH] + "...[truncated]"
+                        body_data = {"type": "request_body", "body": truncated_text}
+                    else:
+                        body_data = {"type": "request_body", "body": body_text}
             else:
                 body_data = {"type": "request_body", "body": None}
             
@@ -340,9 +408,14 @@ class CILRouterLogger:
                     body_text = body.decode('utf-8')
                     try:
                         body_json = json.loads(body_text)
-                        forward_data["body"] = truncate_model_content(body_json)
+                        # 转发请求体使用请求内容截断逻辑（截断用户输入）
+                        forward_data["body"] = truncate_request_content(body_json)
                     except json.JSONDecodeError:
-                        forward_data["body"] = body_text
+                        # 对非JSON文本也应用长度限制
+                        if len(body_text) > MODEL_PREVIEW_LENGTH:
+                            forward_data["body"] = body_text[:MODEL_PREVIEW_LENGTH] + "...[truncated]"
+                        else:
+                            forward_data["body"] = body_text
                 else:
                     forward_data["body"] = None
             except UnicodeDecodeError:
