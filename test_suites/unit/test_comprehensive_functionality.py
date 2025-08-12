@@ -44,7 +44,7 @@ class TestBasicFunctionality:
             assert field in data, f"缺少必需字段: {field}"
         
         assert data["app"] == "CIL Router"
-        assert data["version"] == "1.0.1"
+        assert data["version"] == "1.0.2"
         assert data["load_balancing"] == "round_robin"
         assert isinstance(data["current_provider_index"], int)
         assert isinstance(data["total_providers"], int)
