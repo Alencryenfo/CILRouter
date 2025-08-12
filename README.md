@@ -995,10 +995,13 @@ CILRouter/
 ├── config/
 │   ├── __init__.py
 │   └── config.py            # 配置管理模块
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py          # pytest 配置
-│   └── test_main.py         # 单元测试
+├── test_suites/             # 测试套件
+│   ├── unit/                # 单元测试
+│   ├── integration/         # 集成测试
+│   ├── stress/              # 压力测试
+│   ├── security/            # 安全测试
+│   ├── performance/         # 性能测试
+│   └── reports/             # 测试报告
 ├── .env.example             # 环境变量示例
 ├── .gitignore               # Git忽略文件
 ├── CLAUDE.md                # 项目文档（私有）
@@ -1048,14 +1051,21 @@ flake8 app/ config/ tests/
 #### 3. 运行测试
 
 ```bash
-# 运行所有测试
-pytest tests/ -v
+# 使用测试运行器（推荐）
+python run_tests.py all -v          # 运行所有测试
+python run_tests.py quick           # 快速测试
+python run_tests.py unit            # 单元测试
+python run_tests.py integration     # 集成测试
+python run_tests.py stress          # 压力测试
+python run_tests.py security        # 安全测试
+python run_tests.py report          # 生成测试报告
 
-# 运行特定测试
-pytest tests/test_main.py::test_root -v
+# 或直接使用pytest
+pytest test_suites/ -v              # 运行所有测试
+pytest test_suites/unit/ -v         # 运行单元测试
 
 # 生成覆盖率报告
-pytest tests/ --cov=app --cov=config --cov-report=html
+pytest test_suites/ --cov=app --cov=config --cov-report=html
 ```
 
 #### 4. 开发服务器
@@ -1111,7 +1121,7 @@ app.add_middleware(
 #### 1. 编写单元测试
 
 ```python
-# tests/test_custom.py
+# test_suites/unit/test_custom.py
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
@@ -1128,7 +1138,7 @@ def test_custom_endpoint():
 #### 2. 集成测试
 
 ```python
-# tests/test_integration.py
+# test_suites/integration/test_integration.py
 import pytest
 import httpx
 

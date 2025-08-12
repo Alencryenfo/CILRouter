@@ -7,29 +7,45 @@ CIL Router - 极简版 Claude API 转发器
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import Response, StreamingResponse
 import httpx
+import json
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
+from app.utils.logger import init_logger, get_logger
 
 # 创建 FastAPI 应用
 app = FastAPI(title="CIL Router", version="1.0.1")
 
-# 初始化限流器
-rate_limiter = None
-if config.is_rate_limit_enabled():
-    rate_limit_config = config.get_rate_limit_config()
-    rate_limiter = RateLimiter(
-        requests_per_minute=rate_limit_config["requests_per_minute"],
-        burst_size=rate_limit_config["burst_size"]
-    )
-    # 添加限流中间件
+# 初始化日志模块
+log_config = config.get_log_config()
+init_logger(log_level=log_config["level"], log_dir=log_config["dir"])
+
+# 初始化限流器和中间件
+rate_limit_config = config.get_rate_limit_config()
+ip_block_config = config.get_ip_block_config()
+
+# 如果限流或IP阻止任一功能启用，就添加中间件
+if config.is_rate_limit_enabled() or config.is_ip_block_enabled():
+    rate_limiter = None
+    if config.is_rate_limit_enabled():
+        rate_limiter = RateLimiter(
+            requests_per_minute=rate_limit_config["requests_per_minute"],
+            burst_size=rate_limit_config["burst_size"]
+        )
+    else:
+        # 即使不限流，也需要一个虚拟的限流器
+        rate_limiter = RateLimiter(requests_per_minute=999999, burst_size=999999)
+    
+    # 添加中间件
     app.add_middleware(
         RateLimitMiddleware,
         rate_limiter=rate_limiter,
-        enabled=True,
-        trust_proxy=rate_limit_config["trust_proxy"]
+        enabled=config.is_rate_limit_enabled(),
+        trust_proxy=rate_limit_config["trust_proxy"],
+        ip_block_enabled=ip_block_config["enabled"],
+        blocked_ips_file=ip_block_config["blocked_ips_file"]
     )
 
 
@@ -39,13 +55,24 @@ async def select_provider(request: Request):
     选择供应商接口
     POST 一个数字表示要使用的供应商索引
     """
+    logger = get_logger()
     try:
         # 获取请求体中的数字
         body = await request.body()
-        index = int(body.decode().strip())
+        old_index = config.current_provider_index
+        try:
+            body_str = body.decode('utf-8').strip()
+        except UnicodeDecodeError:
+            # 处理无法解码的二进制数据
+            raise ValueError("请求体包含无效的字符编码")
+        index = int(body_str)
         
         # 设置供应商索引
         if config.set_provider_index(index):
+            # 记录成功切换
+            if logger:
+                logger.log_provider_switch(old_index, index, True)
+            
             return {
                 "success": True, 
                 "message": f"已切换到供应商 {index}",
@@ -53,16 +80,28 @@ async def select_provider(request: Request):
                 "total_providers": config.get_provider_count()
             }
         else:
+            # 记录切换失败
+            if logger:
+                logger.log_provider_switch(old_index, index, False)
+            
             raise HTTPException(
                 status_code=400, 
                 detail=f"无效的供应商索引 {index}，有效范围: 0-{config.get_provider_count()-1}"
             )
-    except ValueError:
-        raise HTTPException(status_code=400, detail="请求体必须是一个数字")
+    except ValueError as ve:
+        if logger:
+            try:
+                body_preview = body.decode('utf-8', errors='replace')[:100] if body else ""
+            except:
+                body_preview = f"<binary data: {len(body)} bytes>" if body else ""
+            logger.log_error("provider_switch", str(ve), {"body": body_preview})
+        raise HTTPException(status_code=400, detail=str(ve) if "字符编码" in str(ve) else "请求体必须是一个数字")
     except HTTPException:
-        # 重新抛出HTTPException，不要被通用异常捕获
+        # HTTPException直接重新抛出，保持原有状态码和详情
         raise
     except Exception as e:
+        if logger:
+            logger.log_error("provider_switch", f"内部错误: {str(e)}")
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
 
@@ -108,13 +147,21 @@ async def forward_request(path: str, request: Request):
         if config.is_auth_enabled():
             auth_header = request.headers.get('authorization', '')
             if not auth_header.startswith('Bearer '):
-                # 鉴权失败，直接丢弃数据包，不返回任何响应
-                return
+                # 鉴权失败，返回401未授权
+                raise HTTPException(
+                    status_code=401, 
+                    detail="未提供有效的Authorization头部",
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
             
             provided_key = auth_header[7:]  # 移除 'Bearer ' 前缀
             if provided_key != config.get_auth_key():
-                # 鉴权失败，直接丢弃数据包，不返回任何响应
-                return
+                # 鉴权失败，返回401未授权
+                raise HTTPException(
+                    status_code=401, 
+                    detail="无效的授权密钥",
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
         # 获取当前供应商配置（使用负载均衡）
         provider = config.get_current_provider_endpoint()
         if not provider["base_url"] or not provider["api_key"]:
@@ -142,15 +189,24 @@ async def forward_request(path: str, request: Request):
         else:
             target_url = f"{base_url}/{path}"
         
+        # 预读取请求体（只读一次，后续所有处理都使用这个body）
+        body = None
+        if method in ["POST", "PUT", "PATCH"]:
+            try:
+                body = await request.body()
+            except Exception as e:
+                print(f"⚠️ 读取请求体失败: {str(e)}")
+                body = b""
+        
         # 检查是否为流式请求
-        is_streaming = _is_streaming_request(headers, await request.body() if method in ["POST", "PUT", "PATCH"] else b"")
+        is_streaming = _is_streaming_request(headers, body or b"")
         
         if is_streaming:
             # 处理流式请求
-            return await _handle_streaming_request(method, target_url, headers, request)
+            return await _handle_streaming_request_with_body(method, target_url, headers, body)
         else:
             # 处理普通请求（支持失败重试）
-            return await _handle_normal_request_with_retry(method, target_url, headers, request)
+            return await _handle_normal_request_with_retry_and_body(method, target_url, headers, body)
             
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"转发请求失败: {str(e)}")
@@ -171,24 +227,39 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
     # 检查请求体中是否有stream参数
     if body:
         try:
+            # 首先尝试判断是否为文本内容
             body_str = body.decode('utf-8', errors='ignore')
-            if '"stream"' in body_str and '"stream":true' in body_str.replace(' ', ''):
+            
+            # 检查content-type是否为JSON
+            content_type = headers.get('content-type', '').lower()
+            if 'application/json' in content_type:
+                # 只有确定是JSON时才尝试JSON解析
+                try:
+                    body_json = json.loads(body_str)
+                    if isinstance(body_json, dict) and body_json.get('stream') is True:
+                        return True
+                except (json.JSONDecodeError, ValueError):
+                    # JSON解析失败，fallback到字符串匹配
+                    pass
+            
+            # 对所有文本内容使用字符串匹配（兼容性更好）
+            if '"stream"' in body_str and ('"stream":true' in body_str.replace(' ', '') or 
+                                         '"stream": true' in body_str):
                 return True
-        except:
+        except UnicodeDecodeError:
+            # 二进制数据无法解码为UTF-8，肯定不包含stream参数
+            pass
+        except Exception:
+            # 其他异常也跳过
             pass
     
     return False
 
 
-async def _handle_normal_request_with_retry(method: str, original_target_url: str, headers: dict, request: Request) -> Response:
+async def _handle_normal_request_with_retry_and_body(method: str, original_target_url: str, headers: dict, body: bytes = None) -> Response:
     """
-    处理普通（非流式）请求，支持失败重试
+    处理普通（非流式）请求，支持失败重试（使用预读取的body）
     """
-    # 获取请求体（只读取一次）
-    if method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-    else:
-        body = None
     
     # 获取当前供应商的所有端点数量
     current_provider_info = config.get_provider_info(config.current_provider_index)
@@ -207,36 +278,43 @@ async def _handle_normal_request_with_retry(method: str, original_target_url: st
                 # 更新请求头中的API Key 
                 headers["Authorization"] = f"Bearer {provider['api_key']}"
                 
-                # 重新构建URL
-                path = original_target_url.split('/', 3)[-1] if '/' in original_target_url else ""
+                # 重新构建URL，保持查询参数
+                from urllib.parse import urlparse, urlunparse, parse_qs
+                parsed_original = urlparse(original_target_url)
+                
+                # 提取路径和查询参数
+                path = parsed_original.path.lstrip('/')  # 移除开头的/
+                query = parsed_original.query
+                
+                # 构建新的URL
                 base_url = provider['base_url'].rstrip('/')
-                target_url = f"{base_url}/{path}"
+                if query:
+                    target_url = f"{base_url}/{path}?{query}"
+                else:
+                    target_url = f"{base_url}/{path}"
             else:
                 target_url = original_target_url
             
-            return await _handle_normal_request(method, target_url, headers, request, body, attempt + 1)
+            return await _handle_normal_request_without_request(method, target_url, headers, body, attempt + 1)
             
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
+        except Exception as e:
+            # 所有错误都重试，直到用完所有端点
             last_exception = e
-            print(f"⚠️ 请求失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+            error_type = type(e).__name__
+            print(f"⚠️ 请求失败，尝试下个端点 (尝试 {attempt + 1}/{max_retries}) [{error_type}]: {str(e)}")
             if attempt == max_retries - 1:
                 break
             continue
-        except Exception as e:
-            # 其他类型的异常不重试
-            raise e
     
     # 所有重试都失败了
     raise HTTPException(status_code=502, detail=f"所有端点都失败了: {str(last_exception)}")
 
 
-async def _handle_normal_request(method: str, target_url: str, headers: dict, request: Request, body: bytes = None, attempt: int = 1) -> Response:
+async def _handle_normal_request_without_request(method: str, target_url: str, headers: dict, body: bytes = None, attempt: int = 1) -> Response:
     """
-    处理普通（非流式）请求
+    处理普通（非流式）请求（使用预读取的body）
     """
-    # 如果没有提供body，则获取请求体
-    if body is None and method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
+    logger = get_logger()
     
     # 记录请求详情
     retry_info = f" (重试 {attempt})" if attempt > 1 else ""
@@ -246,6 +324,10 @@ async def _handle_normal_request(method: str, target_url: str, headers: dict, re
     if body:
         body_preview = body.decode('utf-8', errors='ignore')[:200] + ('...' if len(body) > 200 else '')
         print(f"📤 请求体预览: {body_preview}")
+    
+    # 详细日志记录
+    if logger:
+        logger.log_forward_request(method, target_url, headers, body, attempt)
     
     # 发送请求
     async with httpx.AsyncClient(timeout=httpx.Timeout(config.get_request_timeout())) as client:
@@ -268,6 +350,10 @@ async def _handle_normal_request(method: str, target_url: str, headers: dict, re
             success_preview = response.text[:200] + ('...' if len(response.text) > 200 else '')
             print(f"✅ 成功响应预览: {success_preview}")
         
+        # 详细日志记录响应
+        if logger:
+            logger.log_forward_response(response.status_code, dict(response.headers), response.content)
+        
         # 复制响应头部
         response_headers = dict(response.headers)
         
@@ -285,15 +371,12 @@ async def _handle_normal_request(method: str, target_url: str, headers: dict, re
         )
 
 
-async def _handle_streaming_request(method: str, target_url: str, headers: dict, request: Request) -> StreamingResponse:
+
+
+async def _handle_streaming_request_with_body(method: str, target_url: str, headers: dict, body: bytes = None) -> StreamingResponse:
     """
-    处理流式请求
+    处理流式请求（使用预读取的body）
     """
-    # 获取请求体
-    if method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-    else:
-        body = None
     
     async def stream_generator():
         """
@@ -312,9 +395,24 @@ async def _handle_streaming_request(method: str, target_url: str, headers: dict,
                         if chunk:
                             yield chunk
         except Exception as e:
-            # 流式错误处理
-            error_msg = f"data: {{\"error\": \"Stream error: {str(e)}\"}}\n\n"
-            yield error_msg.encode()
+            # 统一使用Claude API标准的错误格式
+            error_data = {
+                "error": {
+                    "type": "api_error",
+                    "message": f"Stream connection failed: {str(e)}"
+                }
+            }
+            
+            # 根据Accept头部决定错误响应格式
+            accept_header = headers.get('accept', '').lower()
+            
+            if 'text/event-stream' in accept_header:
+                # SSE格式错误 (Server-Sent Events)
+                error_msg = f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                yield error_msg.encode()
+            else:
+                # 默认使用NDJSON格式（符合Claude streaming API标准）
+                yield (json.dumps(error_data, ensure_ascii=False) + "\n").encode()
     
     # 设置流式响应头部
     streaming_headers = {
@@ -335,10 +433,14 @@ async def _handle_streaming_request(method: str, target_url: str, headers: dict,
     )
 
 
+
+
+
+
 if __name__ == "__main__":
     import uvicorn
     server_config = config.get_server_config()
     print(f"🚀 启动 CIL Router 在 {server_config['host']}:{server_config['port']}")
     print(f"📡 配置了 {config.get_provider_count()} 个供应商")
     print(f"🎯 当前使用供应商 {config.current_provider_index}")
-    uvicorn.run(app, host=server_config['host'], port=server_config['port'])
+    uvicorn.run(app, host=server_config['host'], port=server_config['port'], access_log=False)
