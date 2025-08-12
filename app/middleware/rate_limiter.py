@@ -348,9 +348,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 记录请求开始
         if logger:
             logger.log_request_start(request, client_ip)
-            # 避免在中间件中读取请求体，因为这会干扰后续处理
+            # 注意：不在中间件中读取请求体，因为这会干扰后续处理
             # 请求体记录将在主处理函数中完成
-            logger.log_request_body(b'')
         
         # 首先检查IP是否被阻止（优先级最高）
         is_blocked = self._is_ip_blocked(client_ip)
@@ -365,15 +364,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 如果限流未启用，跳过限流检查
         if not self.enabled:
             response = await call_next(request)
-            if logger:
-                logger.log_response(response)
+            # 注意：不在中间件中记录响应体，因为无法获取响应体内容
+            # 响应体记录将在主处理函数中完成
             return response
         
         # 检查是否需要跳过限流
         if self._should_skip_rate_limit(request):
             response = await call_next(request)
-            if logger:
-                logger.log_response(response)
+            # 注意：不在中间件中记录响应体，因为无法获取响应体内容
+            # 响应体记录将在主处理函数中完成
             return response
         
         # 检查是否允许请求
@@ -419,8 +418,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             response.headers["X-RateLimit-Remaining"] = str(int(bucket_status["tokens"]))
             response.headers["X-RateLimit-Reset"] = str(int(bucket_status["last_refill"]) + 60)
         
-        # 记录响应
-        if logger:
-            logger.log_response(response)
+        # 注意：不在中间件中记录响应体，因为无法获取响应体内容
+        # 响应体记录将在主处理函数中完成
         
         return response
