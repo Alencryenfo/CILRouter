@@ -60,6 +60,10 @@ async def select_provider(request: Request):
         # 获取请求体中的数字
         body = await request.body()
         old_index = config.current_provider_index
+        
+        # 记录请求体
+        if logger:
+            logger.log_request_body(body)
         try:
             body_str = body.decode('utf-8').strip()
         except UnicodeDecodeError:
@@ -73,12 +77,24 @@ async def select_provider(request: Request):
             if logger:
                 logger.log_provider_switch(old_index, index, True)
             
-            return {
+            response_data = {
                 "success": True, 
                 "message": f"已切换到供应商 {index}",
                 "current_index": index,
                 "total_providers": config.get_provider_count()
             }
+            
+            # 记录响应体
+            if logger:
+                response_json = json.dumps(response_data, ensure_ascii=False).encode('utf-8')
+                from fastapi import Response as FastAPIResponse
+                temp_response = FastAPIResponse(
+                    content=response_json,
+                    status_code=200
+                )
+                logger.log_response(temp_response, response_json)
+            
+            return response_data
         else:
             # 记录切换失败
             if logger:
@@ -106,31 +122,86 @@ async def select_provider(request: Request):
 
 
 @app.get("/")
-async def root():
+async def root(request: Request):
     """根路径，返回当前状态"""
-    current_provider_info = config.get_provider_info(config.current_provider_index)
-    return {
-        "app": "CIL Router",
-        "version": "1.0.2",
-        "current_provider_index": config.current_provider_index,
-        "total_providers": config.get_provider_count(),
-        "current_provider_endpoints": current_provider_info.get("endpoints_count", 0),
-        "current_provider_urls": current_provider_info.get("base_urls", []),
-        "load_balancing": "round_robin"
-    }
+    logger = get_logger()
+    
+    try:
+        # 记录请求信息
+        if logger:
+            logger.log_request_start(request, "root")
+        
+        current_provider_info = config.get_provider_info(config.current_provider_index)
+        response_data = {
+            "app": "CIL Router",
+            "version": "1.0.2",
+            "current_provider_index": config.current_provider_index,
+            "total_providers": config.get_provider_count(),
+            "current_provider_endpoints": current_provider_info.get("endpoints_count", 0),
+            "current_provider_urls": current_provider_info.get("base_urls", []),
+            "load_balancing": "round_robin"
+        }
+        
+        # 记录响应
+        if logger:
+            response_json = json.dumps(response_data, ensure_ascii=False).encode('utf-8')
+            from fastapi import Response as FastAPIResponse
+            temp_response = FastAPIResponse(
+                content=response_json,
+                status_code=200
+            )
+            logger.log_response(temp_response, response_json)
+        
+        return response_data
+    
+    except HTTPException:
+        # HTTPException直接重新抛出，保持原有状态码和详情
+        raise
+    except Exception as e:
+        if logger:
+            logger.log_error("root", f"内部错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
 
 @app.get("/providers")
-async def get_providers():
+async def get_providers(request: Request):
     """获取所有供应商的详细信息"""
-    providers_info = config.get_all_providers_info()
-    # 隐藏API Key信息
-    for provider in providers_info:
-        provider.pop("api_keys", None)  # 完全移除API Key信息
-    return {
-        "current_provider_index": config.current_provider_index,
-        "providers": providers_info
-    }
+    logger = get_logger()
+    
+    try:
+        # 记录请求信息
+        if logger:
+            logger.log_request_start(request, "providers")
+        
+        providers_info = config.get_all_providers_info()
+        # 隐藏API Key信息
+        for provider in providers_info:
+            provider.pop("api_keys", None)  # 完全移除API Key信息
+        
+        response_data = {
+            "current_provider_index": config.current_provider_index,
+            "providers": providers_info
+        }
+        
+        # 记录响应
+        if logger:
+            response_json = json.dumps(response_data, ensure_ascii=False).encode('utf-8')
+            from fastapi import Response as FastAPIResponse
+            temp_response = FastAPIResponse(
+                content=response_json,
+                status_code=200
+            )
+            logger.log_response(temp_response, response_json)
+        
+        return response_data
+    
+    except HTTPException:
+        # HTTPException直接重新抛出，保持原有状态码和详情
+        raise
+    except Exception as e:
+        if logger:
+            logger.log_error("providers", f"内部错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
 
 
@@ -142,6 +213,7 @@ async def forward_request(path: str, request: Request):
     智能处理API Key：如果请求中有Authorization头部则替换，没有则添加
     支持流式响应
     """
+    logger = get_logger()
     try:
         # 鉴权检查：如果启用了鉴权，验证Authorization头部
         if config.is_auth_enabled():
@@ -197,6 +269,10 @@ async def forward_request(path: str, request: Request):
             except Exception as e:
                 print(f"⚠️ 读取请求体失败: {str(e)}")
                 body = b""
+        
+        # 记录请求体
+        if logger and body is not None:
+            logger.log_request_body(body)
         
         # 检查是否为流式请求
         is_streaming = _is_streaming_request(headers, body or b"")
@@ -362,6 +438,18 @@ async def _handle_normal_request_without_request(method: str, target_url: str, h
         response_headers.pop('transfer-encoding', None)
         response_headers.pop('content-length', None)
         
+        # 记录响应体
+        logger = get_logger()
+        if logger:
+            # 创建一个临时的Response对象用于日志记录
+            from fastapi import Response as FastAPIResponse
+            temp_response = FastAPIResponse(
+                content=response.content,
+                status_code=response.status_code,
+                headers=response_headers
+            )
+            logger.log_response(temp_response, response.content)
+        
         # 返回完全相同的响应
         return Response(
             content=response.content,
@@ -382,6 +470,9 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
         """
         流式响应生成器
         """
+        logger = get_logger()
+        stream_content = b""  # 收集所有流式内容用于日志记录
+        
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(config.get_stream_timeout())) as client:
                 async with client.stream(
@@ -393,8 +484,65 @@ async def _handle_streaming_request_with_body(method: str, target_url: str, head
                     # 流式传输响应内容
                     async for chunk in response.aiter_bytes():
                         if chunk:
+                            stream_content += chunk
                             yield chunk
+                    
+                    # 流式传输完成后记录完整内容
+                    if logger and stream_content:
+                        try:
+                            # 尝试解析为可读格式
+                            content_text = stream_content.decode('utf-8')
+                            # 对于SSE流，清理格式以便阅读
+                            if 'data: ' in content_text:
+                                # 提取所有的data字段
+                                import re
+                                data_matches = re.findall(r'data: (.*?)\n\n', content_text, re.DOTALL)
+                                if data_matches:
+                                    # 尝试解析每个data块
+                                    parsed_data = []
+                                    for data_match in data_matches:
+                                        try:
+                                            parsed_json = json.loads(data_match)
+                                            parsed_data.append(parsed_json)
+                                        except json.JSONDecodeError:
+                                            parsed_data.append(data_match)
+                                    
+                                    logger.debug("流式响应完成", {
+                                        "type": "stream_response_complete",
+                                        "total_chunks": len(stream_content.split(b'data: ')),
+                                        "parsed_data": parsed_data[:5],  # 只记录前5个块避免日志过长
+                                        "total_bytes": len(stream_content)
+                                    })
+                                else:
+                                    logger.debug("流式响应完成", {
+                                        "type": "stream_response_complete", 
+                                        "content_preview": content_text[:500] + "..." if len(content_text) > 500 else content_text,
+                                        "total_bytes": len(stream_content)
+                                    })
+                            else:
+                                # 非SSE格式的流式响应
+                                logger.debug("流式响应完成", {
+                                    "type": "stream_response_complete",
+                                    "content_preview": content_text[:500] + "..." if len(content_text) > 500 else content_text,
+                                    "total_bytes": len(stream_content)
+                                })
+                        except UnicodeDecodeError:
+                            # 二进制流式响应
+                            logger.debug("流式响应完成", {
+                                "type": "stream_response_complete",
+                                "content_type": "binary",
+                                "total_bytes": len(stream_content)
+                            })
         except Exception as e:
+            # 记录流式响应错误
+            if logger:
+                logger.error("流式响应失败", {
+                    "type": "stream_response_error",
+                    "error": str(e),
+                    "target_url": target_url,
+                    "method": method
+                })
+            
             # 统一使用Claude API标准的错误格式
             error_data = {
                 "error": {

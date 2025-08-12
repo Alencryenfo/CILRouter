@@ -8,10 +8,29 @@ import os
 import json
 import logging
 import logging.handlers
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import Request, Response
+
+
+class UTC8Formatter(logging.Formatter):
+    """UTC+8时区的日志格式器"""
+    
+    def formatTime(self, record, datefmt=None):
+        """格式化时间为UTC+8"""
+        # 获取UTC时间并转换为UTC+8
+        utc_time = datetime.fromtimestamp(record.created, timezone.utc)
+        utc8_time = utc_time + timedelta(hours=8)
+        
+        if datefmt:
+            return utc8_time.strftime(datefmt)
+        else:
+            return utc8_time.strftime('%Y-%m-%d %H:%M:%S')
+    
+    def converter(self, timestamp):
+        """时间戳转换器"""
+        return datetime.fromtimestamp(timestamp, timezone.utc) + timedelta(hours=8)
 
 
 class CILRouterLogger:
@@ -64,10 +83,11 @@ class CILRouterLogger:
             encoding='utf-8'
         )
         
-        # 设置日志格式
-        formatter = logging.Formatter(
-            fmt='%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+        # 设置日志格式（使用UTC+8时区）
+        formatter = UTC8Formatter(
+            fmt='[%(asctime)s|%(levelname)-8s|%(name)s|%(filename)s:%(funcName)s():%(lineno)d]:%(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            style='%'
         )
         handler.setFormatter(formatter)
         
@@ -164,7 +184,7 @@ class CILRouterLogger:
             "query": dict(request.query_params),
             "headers": dict(request.headers),
             "client_ip": client_ip,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         self.debug("请求开始", request_data)
@@ -205,7 +225,7 @@ class CILRouterLogger:
             "type": "response",
             "status_code": response.status_code,
             "headers": dict(response.headers),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         # 记录响应体（如果有）
@@ -237,7 +257,7 @@ class CILRouterLogger:
             "url": url,
             "headers": headers,
             "attempt": attempt,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         # 记录请求体
@@ -266,7 +286,7 @@ class CILRouterLogger:
             "type": "forward_response",
             "status_code": status_code,
             "headers": headers,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         # 记录响应体
@@ -295,7 +315,7 @@ class CILRouterLogger:
             "type": "rate_limit",
             "client_ip": client_ip,
             "allowed": allowed,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         if bucket_status:
@@ -315,7 +335,7 @@ class CILRouterLogger:
             "type": "ip_block",
             "client_ip": client_ip,
             "blocked": blocked,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         if blocked:
@@ -333,7 +353,7 @@ class CILRouterLogger:
             "old_index": old_index,
             "new_index": new_index,
             "success": success,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         if success:
@@ -350,13 +370,18 @@ class CILRouterLogger:
             "type": "error",
             "error_type": error_type,
             "error_message": error_message,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": get_utc8_timestamp()
         }
         
         if error_details:
             error_data["error_details"] = error_details
         
         self.error("系统错误", error_data)
+
+
+def get_utc8_timestamp() -> str:
+    """获取UTC+8时区的时间戳字符串"""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat()
 
 
 # 全局日志实例，将在配置加载后初始化
