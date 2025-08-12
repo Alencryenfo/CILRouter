@@ -9,6 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 import httpx
 import sys
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
@@ -131,13 +132,13 @@ async def forward_request(path: str, request: Request):
     logger = get_logger()
     
     try:
-        # 获取请求体（只读取一次）
-        if method in ["POST", "PUT", "PATCH"]:
-            body = await request.body()
-            if logger:
-                logger.log_request_body(body)
-        else:
-            body = None
+        # 先取method变量，避免后面使用时未定义的问题
+        method = request.method.upper()
+        
+        # 仅在需要时读取body（读一次）
+        body = await request.body() if method in ["POST", "PUT", "PATCH"] else None
+        if body and logger:
+            logger.log_request_body(body)
         
         # 鉴权检查：如果启用了鉴权，验证Authorization头部
         if config.is_auth_enabled():
@@ -145,15 +146,15 @@ async def forward_request(path: str, request: Request):
             if not auth_header.startswith('Bearer '):
                 if logger:
                     logger.warning("鉴权失败：缺少Bearer token")
-                # 鉴权失败，直接丢弃数据包，不返回任何响应
-                return
+                # 静默拒绝的最接近做法：空体+403
+                return Response(status_code=403, content=b"")
 
             provided_key = auth_header[7:]  # 移除 'Bearer ' 前缀
             if provided_key != config.get_auth_key():
                 if logger:
                     logger.warning("鉴权失败：token无效")
-                # 鉴权失败，直接丢弃数据包，不返回任何响应
-                return
+                # 静默拒绝的最接近做法：空体+403
+                return Response(status_code=403, content=b"")
         # 获取当前供应商配置（使用负载均衡）
         provider = config.get_current_provider_endpoint()
         if not provider["base_url"] or not provider["api_key"]:
@@ -161,27 +162,34 @@ async def forward_request(path: str, request: Request):
                 logger.error("供应商配置不完整")
             raise HTTPException(status_code=503, detail="供应商配置不完整")
 
-        # 获取原始请求数据
+        # 原始请求头拷贝并清洗
         headers = dict(request.headers)
-        method = request.method.upper()
-        query_params = str(request.url.query)
 
-        # 移除可能干扰转发的头部
-        headers.pop('host', None)
-        headers.pop('content-length', None)
-        headers.pop('transfer-encoding', None)
+        # 强制上游不压缩，避免解压错位问题
+        headers.pop('accept-encoding', None)
+        headers['Accept-Encoding'] = 'identity'
 
-        # 智能处理API Key：移除所有现有的认证头部，然后添加供应商的
+        # 移除逐跳头（hop-by-hop headers）
+        hop_by_hop_headers = [
+            'host', 'content-length', 'transfer-encoding', 'connection', 'keep-alive',
+            'proxy-connection', 'te', 'trailer', 'upgrade', 'expect'
+        ]
+        for hk in hop_by_hop_headers:
+            headers.pop(hk, None)
+            headers.pop(hk.title(), None)
+
+        # 统一由我们注入认证
         headers.pop('authorization', None)
         headers.pop('Authorization', None)
         headers["Authorization"] = f"Bearer {provider['api_key']}"
 
-        # 构建完整的目标URL
+        # 目标URL（保留原 query）
         base_url = provider['base_url'].rstrip('/')
-        if query_params:
-            target_url = f"{base_url}/{path}?{query_params}"
-        else:
-            target_url = f"{base_url}/{path}"
+        # 用urlsplit拼原path+query
+        split_req = urlsplit(str(request.url))
+        target_url = f"{base_url}/{path}"
+        if split_req.query:
+            target_url = f"{target_url}?{split_req.query}"
 
         # 检查是否为流式请求
         is_streaming = _is_streaming_request(headers, body if body else b"")
@@ -251,10 +259,13 @@ async def _handle_normal_request_with_retry(method: str, original_target_url: st
                 # 更新请求头中的API Key
                 headers["Authorization"] = f"Bearer {provider['api_key']}"
 
-                # 重新构建URL
-                path = original_target_url.split('/', 3)[-1] if '/' in original_target_url else ""
+                # 用urlsplit严格重建URL
+                split_orig = urlsplit(original_target_url)
                 base_url = provider['base_url'].rstrip('/')
-                target_url = f"{base_url}/{path}"
+                # 保留原path与query
+                target_url = f"{base_url}{split_orig.path}"
+                if split_orig.query:
+                    target_url = f"{target_url}?{split_orig.query}"
             else:
                 target_url = original_target_url
 
@@ -329,10 +340,13 @@ async def _handle_normal_request(method: str, target_url: str, headers: dict, bo
         # 复制响应头部
         response_headers = dict(response.headers)
 
-        # 移除可能导致问题的响应头部
-        response_headers.pop('content-encoding', None)
-        response_headers.pop('transfer-encoding', None)
-        response_headers.pop('content-length', None)
+        # 移除逐跳头和可能导致问题的响应头部
+        response_hop_headers = [
+            'content-encoding', 'transfer-encoding', 'content-length', 
+            'connection', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'upgrade'
+        ]
+        for hk in response_hop_headers:
+            response_headers.pop(hk, None)
 
         # 记录响应信息
         final_response = Response(
@@ -371,10 +385,13 @@ async def _handle_streaming_request_with_retry(method: str, original_target_url:
                 # 更新请求头中的API Key
                 headers["Authorization"] = f"Bearer {provider['api_key']}"
                 
-                # 重新构建URL
-                path = original_target_url.split('/', 3)[-1] if '/' in original_target_url else ""
+                # 用urlsplit严格重建URL
+                split_orig = urlsplit(original_target_url)
                 base_url = provider['base_url'].rstrip('/')
-                target_url = f"{base_url}/{path}"
+                # 保留原path与query
+                target_url = f"{base_url}{split_orig.path}"
+                if split_orig.query:
+                    target_url = f"{target_url}?{split_orig.query}"
             else:
                 target_url = original_target_url
             
@@ -431,6 +448,14 @@ async def _handle_streaming_request(method: str, target_url: str, headers: dict,
                     # 记录流式响应开始
                     if logger:
                         logger.log_forward_response(response.status_code, dict(response.headers))
+                    
+                    # 如果是错误状态码，发送错误消息结束流
+                    if response.status_code >= 400:
+                        error_content = await response.aread()
+                        error_text = error_content.decode('utf-8', errors='ignore')
+                        error_msg = f"data: {{\\\"error\\\": \\\"HTTP {response.status_code}: {error_text[:200]}...\\\", \\\"status_code\\\": {response.status_code}}}\\n\\n"
+                        yield error_msg.encode()
+                        return
                     
                     # 流式传输响应内容
                     async for chunk in response.aiter_bytes():
