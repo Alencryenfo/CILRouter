@@ -44,9 +44,8 @@ services:
       - PROVIDER_4_BASE_URL=${PROVIDER_4_BASE_URL:-}
       - PROVIDER_4_API_KEY=${PROVIDER_4_API_KEY:-}
     
-    # 挂载配置和日志目录
+    # 挂载日志目录（配置通过环境变量传递）
     volumes:
-      - ./config:/app/config:ro
       - ./logs:/app/logs:rw
     
     # 重启策略
