@@ -132,7 +132,7 @@ async def forward_request(path: str, request: Request):
 
         is_streaming = _is_streaming_request(headers, body)
 
-        print(method, path, query_params, headers, body)
+        print(method, path, query_params, headers, body[:50])
         if is_streaming:
             return await _streaming_request(method, path, query_params, headers, body)
         else:
