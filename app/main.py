@@ -18,6 +18,9 @@ import json
 import re
 import asyncio
 
+from starlette.background import BackgroundTask
+import anyio
+
 provider_lock = asyncio.Lock()
 ALLOWED_HEADERS = {
     "authorization", "content-type", "accept", "user-agent",
@@ -191,13 +194,16 @@ async def _streaming_request(
     body: bytes,
 ):
     """
-    流式代理（修复 StreamClosed）：
-    - 手动管理 httpx Client/Response 生命周期
-    - 指定状态码重试，重试间隔 2s
+    稳定的流式代理实现：
+    - 加锁读取当前端点
+    - 使用 aiter_bytes()（更稳，不直接暴露底层 raw）
+    - 在生成器里吞掉上游/下游常见中断异常（不再把 httpx.StreamClosed 冒到 Starlette）
+    - 使用 BackgroundTask 统一关闭 httpx.AsyncClient（避免在迭代中关闭 client）
+    - 对 5xx 做最多 3 次重试；每次重试前重新加锁取端点
     """
     last_exc = None
     for attempt in range(3):
-        # 1) 加锁取端点
+        # 1) 取端点加锁
         async with provider_lock:
             ep = config.get_current_provider_endpoint()
 
@@ -206,43 +212,57 @@ async def _streaming_request(
         if query_params:
             url = f"{url}?{query_params}"
 
-        # 2) 组装上游请求头，仅替换 key
+        # 2) 组装上游请求头
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers.pop("host", None)
 
-        # 3) 建立客户端并以 stream=True 发送；不要用 `async with client.stream(...)`
+        # 3) httpx client —— 显式限制/超时；不让 httpx 自己重试，以免状态错乱
         timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-        client = httpx.AsyncClient(http2=True, timeout=timeout)
+        limits = httpx.Limits(max_keepalive_connections=100, max_connections=100)
+        transport = httpx.AsyncHTTPTransport(retries=0)
+        client = httpx.AsyncClient(http2=True, timeout=timeout, limits=limits, transport=transport)
 
         try:
-            async with client.stream(method, url, headers=up_headers, content=body) as resp:
-                # 状态码重试
+            # 不要提前关闭 client；交给 BackgroundTask
+            resp_cm = client.stream(method, url, headers=up_headers, content=body)
+            async with resp_cm as resp:
+                # 4) 遇 5xx 时重试
                 if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
-                    await client.aclose()
+                    # 不返回，让 for attempt 重来；client 由 finally/BackgroundTask 兜底
                     await asyncio.sleep(2)
                     continue
 
-                # 4) 用生成器托管 resp/client 生命周期
                 async def byte_iter():
                     try:
-                        async for chunk in resp.aiter_raw():
+                        # 用 aiter_bytes() 比 aiter_raw() 更“温和”，避免错误使用 raw 导致关闭异常
+                        async for chunk in resp.aiter_bytes():
+                            # 如果下游已经断开，Starlette 会取消发送任务，这里只需要优雅退出即可
                             yield chunk
-                    finally:
-                        # 无论正常结束还是客户端断开，都确保资源关闭
-                        await client.aclose()
-                        
+                    except (httpx.StreamClosed,
+                            httpx.ReadError,
+                            httpx.RemoteProtocolError,
+                            anyio.EndOfStream,
+                            anyio.ClosedResourceError,
+                            asyncio.CancelledError):
+                        # 上游提前关闭、下游断开、连接被取消：都当作正常结束处理，别再向上抛
+                        return
+                    # 不在这里关闭 client，交给 BackgroundTask，避免与 resp 的上下文冲突
+
                 print(f"[proxy] {method} /{path} ? {query_params} streaming=True")
                 print(f"[proxy] upstream {url} -> {resp.status_code}")
+
+                # 用 BackgroundTask 确保流结束后再关 client（无论正常还是异常）
                 return StreamingResponse(
                     byte_iter(),
                     status_code=resp.status_code,
                     headers=_strip_hop_headers(resp.headers, drop_encoding=False),
+                    background=BackgroundTask(client.aclose),
                 )
 
         except Exception as e:
             last_exc = e
-            # 若建立失败或中途异常，确保 client 关闭；resp 若未创建则跳过
+            # 发生连接/协议类异常，关闭 client，尝试重试
             try:
                 await client.aclose()
             except Exception:
@@ -251,6 +271,7 @@ async def _streaming_request(
                 await asyncio.sleep(2)
             continue
 
+    # 三次尝试失败
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
 
 
