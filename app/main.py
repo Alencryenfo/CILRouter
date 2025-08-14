@@ -157,23 +157,16 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
     if "text/event-stream" in accept or "application/stream" in accept:
         return True
 
-    if body:
-        try:
-            data = json.loads(body)
-            # 只检查顶层的 stream 参数，避免误判嵌套对象中的stream
-            if isinstance(data, dict):
-                # 直接检查顶层 stream
-                if data.get("stream") is True or str(data.get("stream")).lower() == "true":
-                    return True
-                # 检查 stream_options
-                if "stream_options" in data and data["stream_options"] not in (None, False, {}, []):
-                    return True
-        except Exception:
-            # 正则兜底 - 匹配顶层的stream参数
-            if re.search(r'"stream"\s*:\s*(true|1|"true")', body.decode("utf-8", "ignore"), re.I):
-                return True
+    if not body:
+        return False
 
-    return False
+    try:
+        data = json.loads(body)
+        # 仅看“顶层” stream
+        return isinstance(data, dict) and bool(data.get("stream") is True)
+    except Exception:
+        # 解析失败 => 不冒进 (不认为是流式)
+        return False
 
 def _strip_hop_headers(h: dict, drop_encoding: bool) -> dict:
     out = dict(h)
