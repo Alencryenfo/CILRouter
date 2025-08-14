@@ -174,19 +174,20 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
 
 
 async def _streaming_request(
-        method: str,
-        path: str,
-        query_params: str,
-        headers: dict,
-        body: bytes,
+    method: str,
+    path: str,
+    query_params: str,
+    headers: dict,
+    body: bytes,
 ):
     """
-    简洁版：仅替换上游 key，透明流式转发；网络异常最多重试 3 次。
-    假设上下游都规范（Content-Type/分块等正确）。
+    流式代理（修复 StreamClosed）：
+    - 手动管理 httpx Client/Response 生命周期
+    - 指定状态码重试，重试间隔 2s
     """
     last_exc = None
     for attempt in range(3):
-        # 1) 加锁获取端点
+        # 1) 加锁取端点
         async with provider_lock:
             ep = config.get_current_provider_endpoint()
 
@@ -195,33 +196,50 @@ async def _streaming_request(
         if query_params:
             url = f"{url}?{query_params}"
 
-        # 2) 补 Authorization
+        # 2) 组装上游请求头，仅替换 key
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers.pop("host", None)
 
+        # 3) 建立客户端并以 stream=True 发送；不要用 `async with client.stream(...)`
+        timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        client = httpx.AsyncClient(http2=True, timeout=timeout)
+
         try:
-            timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-            async with httpx.AsyncClient(http2=True, timeout=timeout) as client:
-                async with client.stream(method, url, headers=up_headers, content=body) as resp:
-                    # 状态码检查
-                    if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
+            resp = await client.request(method, url, headers=up_headers, content=body, stream=True)
+
+            # 状态码重试
+            if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
+                await resp.aclose()
+                await client.aclose()
+                await asyncio.sleep(2)
+                continue
+
+            # 4) 用生成器托管 resp/client 生命周期
+            async def byte_iter():
+                try:
+                    async for chunk in resp.aiter_raw():
+                        yield chunk
+                finally:
+                    # 无论正常结束还是客户端断开，都确保资源关闭
+                    try:
                         await resp.aclose()
-                        await asyncio.sleep(2)
-                        continue  # 直接进入下一次重试
+                    finally:
+                        await client.aclose()
 
-                    # 正常流式透传
-                    async def byte_iter():
-                        async for chunk in resp.aiter_raw():
-                            yield chunk
+            return StreamingResponse(
+                byte_iter(),
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
 
-                    return StreamingResponse(
-                        byte_iter(),
-                        status_code=resp.status_code,
-                        headers=dict(resp.headers),
-                    )
         except Exception as e:
             last_exc = e
+            # 若建立失败或中途异常，确保 client 关闭；resp 若未创建则跳过
+            try:
+                await client.aclose()
+            except Exception:
+                pass
             if attempt < 2:
                 await asyncio.sleep(2)
             continue
