@@ -121,7 +121,6 @@ async def forward_request(path: str, request: Request):
         }
         headers.pop('authorization', None)
         headers.pop('Authorization', None)
-
         # 请求体
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
