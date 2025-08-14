@@ -5,32 +5,101 @@ CIL Router - 极简版 Claude API 转发器
 """
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import  StreamingResponse
 import httpx
 import sys
 import os
+from contextlib import asynccontextmanager
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
+import anyio
+import asyncio
 
-# 创建 FastAPI 应用
-app = FastAPI(title="CIL Router", version="1.0.1")
 
-# 初始化限流器
-rate_limiter = None
-if config.is_rate_limit_enabled():
-    rate_limit_config = config.get_rate_limit_config()
-    rate_limiter = RateLimiter(
-        requests_per_minute=rate_limit_config["requests_per_minute"],
-        burst_size=rate_limit_config["burst_size"]
-    )
-    # 添加限流中间件
-    app.add_middleware(
-        RateLimitMiddleware,
-        rate_limiter=rate_limiter,
-        enabled=True,
-        trust_proxy=rate_limit_config["trust_proxy"]
-    )
+provider_lock = asyncio.Lock()
+PROHIBIT_HEADERS = {
+    # 逐跳 / 连接管理
+    "authorization","Authorization",
+    "host","Host",
+    "connection","Connection",
+    "keep-alive","Keep-Alive",
+    "proxy-connection","Proxy-Connection",
+    "transfer-encoding","Transfer-Encoding",
+    "te","TE",
+    "trailer","Trailer",
+    "upgrade","Upgrade",
+
+    # 长度 / 期望（交给 httpx 自己计算）
+    "content-length","Content-Length",
+    "expect","Expect",
+
+    # CDN / 代理痕迹（固定名）
+    "cdn-loop","CDN-Loop",
+    "x-forwarded-for","X-Forwarded-For",
+    "x-forwarded-proto","X-Forwarded-Proto",
+    "x-forwarded-host","X-Forwarded-Host",
+    "x-forwarded-server","X-Forwarded-Server",
+    "x-forwarded-port","X-Forwarded-Port",
+    "x-real-ip","X-Real-IP",
+    "true-client-ip","True-Client-IP",
+    "via","Via",
+    "forwarded","Forwarded",
+    }
+
+HOP_HEADERS = ("transfer-encoding","content-length","connection","keep-alive",
+               "proxy-connection","upgrade","te","trailer")
+
+TRANSIENT_EXC = (
+    httpx.ConnectError, httpx.ConnectTimeout,
+    httpx.ReadTimeout, httpx.ReadError,
+    httpx.RemoteProtocolError, httpx.PoolTimeout,
+)
+
+RETRY_STATUS_CODES = {500, 502, 503, 504}
+
+
+
+rate_limit_config = config.get_rate_limit_config()
+RATE_LIMIT_ENABLED = rate_limit_config["RATE_LIMIT_ENABLED"]
+rl = RateLimiter(
+    rpm=rate_limit_config["RATE_LIMIT_RPM"],
+    burst_size=rate_limit_config["RATE_LIMIT_BURST_SIZE"]
+) if RATE_LIMIT_ENABLED else None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 2) 只在启用时启动/关闭 rl；不要在这里 add_middleware
+    try:
+        if rl:
+            await rl.start()
+        yield
+    finally:
+        if rl:
+            await rl.close()
+
+app = FastAPI(title="CILRouter", description="Claude Code透明代理", version="1.0.2",
+              docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+app.add_middleware(
+    RateLimitMiddleware,
+    rate_limiter=rl,                            # 可能为 None；中间件内部需判断 enabled
+    enabled=RATE_LIMIT_ENABLED,
+    trust_proxy=rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
+)
+@app.get("/")
+async def root():
+    """根路径，返回当前状态"""
+    current_provider_info = config.get_provider_info(config.CURRENT_PROVIDER_INDEX)
+    return {
+        "应用名称": "CIL Router",
+        "当前版本": "1.0.2",
+        "当前供应商": config.CURRENT_PROVIDER_INDEX,
+        "全部供应商信息": config.get_all_providers_info(),
+        "供应商端点数目": current_provider_info.get("供应商端点数目"),
+        "供应商端点": current_provider_info.get("供应商端点", [])
+    }
 
 
 @app.post("/select")
@@ -40,59 +109,25 @@ async def select_provider(request: Request):
     POST 一个数字表示要使用的供应商索引
     """
     try:
-        # 获取请求体中的数字
         body = await request.body()
         index = int(body.decode().strip())
-        
-        # 设置供应商索引
         if config.set_provider_index(index):
             return {
-                "success": True, 
+                "success": True,
                 "message": f"已切换到供应商 {index}",
-                "current_index": index,
-                "total_providers": config.get_provider_count()
+                "供应商信息": config.get_provider_info(index)
             }
         else:
             raise HTTPException(
-                status_code=400, 
-                detail=f"无效的供应商索引 {index}，有效范围: 0-{config.get_provider_count()-1}"
+                status_code=400,
+                detail=f"无效的供应商索引 {index}"
             )
     except ValueError:
         raise HTTPException(status_code=400, detail="请求体必须是一个数字")
     except HTTPException:
-        # 重新抛出HTTPException，不要被通用异常捕获
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
-
-
-@app.get("/")
-async def root():
-    """根路径，返回当前状态"""
-    current_provider_info = config.get_provider_info(config.current_provider_index)
-    return {
-        "app": "CIL Router",
-        "version": "1.0.1",
-        "current_provider_index": config.current_provider_index,
-        "total_providers": config.get_provider_count(),
-        "current_provider_endpoints": current_provider_info.get("endpoints_count", 0),
-        "current_provider_urls": current_provider_info.get("base_urls", []),
-        "load_balancing": "round_robin"
-    }
-
-
-@app.get("/providers")
-async def get_providers():
-    """获取所有供应商的详细信息"""
-    providers_info = config.get_all_providers_info()
-    # 隐藏API Key信息
-    for provider in providers_info:
-        provider.pop("api_keys", None)  # 完全移除API Key信息
-    return {
-        "current_provider_index": config.current_provider_index,
-        "providers": providers_info
-    }
-
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
@@ -104,241 +139,114 @@ async def forward_request(path: str, request: Request):
     支持流式响应
     """
     try:
-        # 鉴权检查：如果启用了鉴权，验证Authorization头部
-        if config.is_auth_enabled():
-            auth_header = request.headers.get('authorization', '')
-            if not auth_header.startswith('Bearer '):
-                # 鉴权失败，直接丢弃数据包，不返回任何响应
-                return
-            
-            provided_key = auth_header[7:]  # 移除 'Bearer ' 前缀
-            if provided_key != config.get_auth_key():
-                # 鉴权失败，直接丢弃数据包，不返回任何响应
-                return
-        # 获取当前供应商配置（使用负载均衡）
-        provider = config.get_current_provider_endpoint()
-        if not provider["base_url"] or not provider["api_key"]:
-            raise HTTPException(status_code=503, detail="供应商配置不完整")
-        
-        # 获取原始请求数据
-        headers = dict(request.headers)
+        # 鉴权检查
+        auth_key = (config.get_request_config()["AUTH_KEY"]).strip()
+        if auth_key:
+            auth_header = (request.headers.get('authorization', '')).strip()
+            if not auth_header.lower().startswith('bearer '):
+                raise HTTPException(status_code=401, detail="缺少鉴权令牌")
+            if auth_header[7:] != auth_key:
+                raise HTTPException(status_code=401, detail="令牌无效")
+
+        # 请求方法
         method = request.method.upper()
+
+        # 目标URL
         query_params = str(request.url.query)
-        
-        # 移除可能干扰转发的头部
-        headers.pop('host', None)
-        headers.pop('content-length', None)
-        headers.pop('transfer-encoding', None)
-        
-        # 智能处理API Key：移除所有现有的认证头部，然后添加供应商的
-        headers.pop('authorization', None)
-        headers.pop('Authorization', None)
-        headers["Authorization"] = f"Bearer {provider['api_key']}"
-        
-        # 构建完整的目标URL
-        base_url = provider['base_url'].rstrip('/')
-        if query_params:
-            target_url = f"{base_url}/{path}?{query_params}"
-        else:
-            target_url = f"{base_url}/{path}"
-        
-        # 检查是否为流式请求
-        is_streaming = _is_streaming_request(headers, await request.body() if method in ["POST", "PUT", "PATCH"] else b"")
-        
-        if is_streaming:
-            # 处理流式请求
-            return await _handle_streaming_request(method, target_url, headers, request)
-        else:
-            # 处理普通请求（支持失败重试）
-            return await _handle_normal_request_with_retry(method, target_url, headers, request)
-            
+
+        # 请求头处理
+        headers = dict(request.headers)
+        for k in PROHIBIT_HEADERS:
+            headers.pop(k, None)
+        for k in list(headers.keys()):
+            kl = k.lower()
+            if kl.startswith(("cf-", "cf-access-")):
+                headers.pop(k, None)
+
+
+        body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
+
+        print(method, path, query_params, headers, body[:50])
+        return await _proxy_request(method, path, query_params, headers, body)
+
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"转发请求失败: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
+def _strip_hop_headers(h: dict) -> dict:
+    return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
 
-def _is_streaming_request(headers: dict, body: bytes) -> bool:
-    """
-    判断是否为流式请求
-    检查请求头中的Accept、Content-Type以及请求体中的stream参数
-    """
-    # 检查Accept头部是否包含流式类型
-    accept = headers.get('accept', '').lower()
-    if 'text/event-stream' in accept or 'application/stream' in accept:
-        return True
-    
-    # 检查请求体中是否有stream参数
-    if body:
+async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes):
+    last_exc = None
+    attempts = 3
+
+    for attempt in range(1, attempts + 1):
+        async with provider_lock:
+            ep = config.get_current_provider_endpoint()
+
+        base_url = ep["base_url"].rstrip("/")
+        url = f"{base_url}/{path.lstrip('/')}"
+        if query_params:
+            url = f"{url}?{query_params}"
+
+        up_headers = dict(headers)
+        up_headers["authorization"] = f"Bearer {ep['api_key']}"
+
+        timeout   = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        limits    = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
+        transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
+        client    = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
+
+        handed_off = False  # 关键：标记是否已把关闭责任交给生成器
         try:
-            body_str = body.decode('utf-8', errors='ignore')
-            if '"stream"' in body_str and '"stream":true' in body_str.replace(' ', ''):
-                return True
-        except:
-            pass
-    
-    return False
+            resp_cm = client.stream(method, url, headers=up_headers, content=body)
+            resp = await resp_cm.__aenter__()
 
+            async def byte_iter():
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+                except (httpx.StreamClosed, httpx.ReadError,
+                        httpx.RemoteProtocolError, anyio.EndOfStream,
+                        anyio.ClosedResourceError, asyncio.CancelledError):
+                    return
+                finally:
+                    try:
+                        await resp_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
 
-async def _handle_normal_request_with_retry(method: str, original_target_url: str, headers: dict, request: Request) -> Response:
-    """
-    处理普通（非流式）请求，支持失败重试
-    """
-    # 获取请求体（只读取一次）
-    if method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-    else:
-        body = None
-    
-    # 获取当前供应商的所有端点数量
-    current_provider_info = config.get_provider_info(config.current_provider_index)
-    max_retries = current_provider_info.get("endpoints_count", 1)
-    
-    last_exception = None
-    
-    for attempt in range(max_retries):
-        try:
-            # 为每次重试获取新的端点
-            if attempt > 0:
-                provider = config.get_current_provider_endpoint()
-                if not provider["base_url"] or not provider["api_key"]:
-                    continue
-                
-                # 更新请求头中的API Key 
-                headers["Authorization"] = f"Bearer {provider['api_key']}"
-                
-                # 重新构建URL
-                path = original_target_url.split('/', 3)[-1] if '/' in original_target_url else ""
-                base_url = provider['base_url'].rstrip('/')
-                target_url = f"{base_url}/{path}"
-            else:
-                target_url = original_target_url
-            
-            return await _handle_normal_request(method, target_url, headers, request, body, attempt + 1)
-            
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as e:
-            last_exception = e
-            print(f"⚠️ 请求失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
-            if attempt == max_retries - 1:
-                break
-            continue
+            handed_off = True  # 已把关闭责任交给生成器
+            print(resp.status_code, resp.headers)
+            return StreamingResponse(
+                byte_iter(),
+                status_code=resp.status_code,
+                headers=_strip_hop_headers(resp.headers),
+            )
+
+        except TRANSIENT_EXC as e:
+            last_exc = e
         except Exception as e:
-            # 其他类型的异常不重试
-            raise e
-    
-    # 所有重试都失败了
-    raise HTTPException(status_code=502, detail=f"所有端点都失败了: {str(last_exception)}")
+            last_exc = e
+        finally:
+            # 只有在“没有交付流”的情况下，才由这里关闭资源
+            if not handed_off:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
 
+        if attempt < attempts:
+            await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
 
-async def _handle_normal_request(method: str, target_url: str, headers: dict, request: Request, body: bytes = None, attempt: int = 1) -> Response:
-    """
-    处理普通（非流式）请求
-    """
-    # 如果没有提供body，则获取请求体
-    if body is None and method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-    
-    # 记录请求详情
-    retry_info = f" (重试 {attempt})" if attempt > 1 else ""
-    print(f"🔄 转发请求{retry_info}: {method} {target_url}")
-    if attempt == 1:  # 只在第一次尝试时显示详细头部信息
-        print(f"📤 请求头: {dict((k, v[:50] + '...' if len(v) > 50 else v) for k, v in headers.items())}")
-    if body:
-        body_preview = body.decode('utf-8', errors='ignore')[:200] + ('...' if len(body) > 200 else '')
-        print(f"📤 请求体预览: {body_preview}")
-    
-    # 发送请求
-    async with httpx.AsyncClient(timeout=httpx.Timeout(config.get_request_timeout())) as client:
-        response = await client.request(
-            method=method,
-            url=target_url,
-            headers=headers,
-            content=body
-        )
-        
-        # 记录响应详情
-        print(f"📥 响应状态: {response.status_code}")
-        print(f"📥 响应头: {dict(response.headers)}")
-        
-        # 如果不是200，记录错误详情
-        if response.status_code != 200:
-            error_content = response.text[:500] + ('...' if len(response.text) > 500 else '')
-            print(f"❌ 错误响应内容: {error_content}")
-        else:
-            success_preview = response.text[:200] + ('...' if len(response.text) > 200 else '')
-            print(f"✅ 成功响应预览: {success_preview}")
-        
-        # 复制响应头部
-        response_headers = dict(response.headers)
-        
-        # 移除可能导致问题的响应头部
-        response_headers.pop('content-encoding', None)
-        response_headers.pop('transfer-encoding', None)
-        response_headers.pop('content-length', None)
-        
-        # 返回完全相同的响应
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            headers=response_headers,
-            media_type=response_headers.get('content-type')
-        )
-
-
-async def _handle_streaming_request(method: str, target_url: str, headers: dict, request: Request) -> StreamingResponse:
-    """
-    处理流式请求
-    """
-    # 获取请求体
-    if method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-    else:
-        body = None
-    
-    async def stream_generator():
-        """
-        流式响应生成器
-        """
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(config.get_stream_timeout())) as client:
-                async with client.stream(
-                    method=method,
-                    url=target_url,
-                    headers=headers,
-                    content=body
-                ) as response:
-                    # 流式传输响应内容
-                    async for chunk in response.aiter_bytes():
-                        if chunk:
-                            yield chunk
-        except Exception as e:
-            # 流式错误处理
-            error_msg = f"data: {{\"error\": \"Stream error: {str(e)}\"}}\n\n"
-            yield error_msg.encode()
-    
-    # 设置流式响应头部
-    streaming_headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",  # 禁用nginx缓冲
-    }
-    
-    # 如果原请求期望特定的媒体类型，使用它
-    content_type = headers.get('accept', 'text/event-stream')
-    if 'application/json' in content_type:
-        content_type = 'text/event-stream'
-    
-    return StreamingResponse(
-        stream_generator(),
-        media_type=content_type,
-        headers=streaming_headers
-    )
-
+    raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
 
 if __name__ == "__main__":
     import uvicorn
+
     server_config = config.get_server_config()
-    print(f"🚀 启动 CIL Router 在 {server_config['host']}:{server_config['port']}")
-    print(f"📡 配置了 {config.get_provider_count()} 个供应商")
-    print(f"🎯 当前使用供应商 {config.current_provider_index}")
-    uvicorn.run(app, host=server_config['host'], port=server_config['port'])
+    print(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
+    print(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
+    print(f"🎯 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
+    uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'],http="h11", timeout_keep_alive=120,access_log=False)
