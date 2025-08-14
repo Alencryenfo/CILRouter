@@ -435,7 +435,7 @@ if __name__ == "__main__":
     import uvicorn
 
     server_config = config.get_server_config()
-    print(f"🚀 启动 CIL Router 在 {server_config['host']}:{server_config['port']}")
+    print(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     print(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
     print(f"🎯 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
     uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'])
