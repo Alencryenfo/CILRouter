@@ -110,9 +110,9 @@ async def forward_request(path: str, request: Request):
         if auth_key:
             auth_header = (request.headers.get('authorization', '')).strip()
             if not auth_header.lower().startswith('bearer '):
-                return
+                raise HTTPException(status_code=401, detail="缺少鉴权令牌")
             if auth_header[7:] != auth_key:
-                return
+                raise HTTPException(status_code=401, detail="令牌无效")
 
         # 请求方法
         method = request.method.upper()
@@ -172,6 +172,16 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
 
     return False
 
+def _strip_hop_headers(h: dict, drop_encoding: bool) -> dict:
+    out = dict(h)
+    # 逐跳/长度类：交给 Starlette 处理
+    for k in ("transfer-encoding", "content-length", "connection", "keep-alive",
+              "proxy-connection", "upgrade", "te", "trailer"):
+        out.pop(k, None)
+    if drop_encoding:
+        # normal_request 用 resp.content（解压后），避免标错编码
+        out.pop("content-encoding", None)
+    return out
 
 async def _streaming_request(
     method: str,
@@ -226,11 +236,13 @@ async def _streaming_request(
                         await resp.aclose()
                     finally:
                         await client.aclose()
-
+            print(f"[proxy] {method} /{path} ? {query_params} streaming=True")
+            # 在两种请求返回前：
+            print(f"[proxy] upstream {url} -> {resp.status_code}")
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=_strip_hop_headers(resp.headers, drop_encoding=False),
             )
 
         except Exception as e:
@@ -282,12 +294,14 @@ async def normal_request(
                 if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
                     await asyncio.sleep(2)
                     continue  # 直接重试
-
+                print(f"[proxy] {method} /{path} ? {query_params} streaming=False")
+                # 在两种请求返回前：
+                print(f"[proxy] upstream {url} -> {resp.status_code}")
                 # 一次性读取全部内容并返回
                 return Response(
                     content=resp.content,
                     status_code=resp.status_code,
-                    headers=dict(resp.headers),
+                    headers=_strip_hop_headers(resp.headers, drop_encoding=True),
                 )
         except Exception as e:
             last_exc = e
