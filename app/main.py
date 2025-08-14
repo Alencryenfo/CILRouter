@@ -10,6 +10,7 @@ import httpx
 import sys
 import os
 from contextlib import asynccontextmanager
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config.config as config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
@@ -24,6 +25,8 @@ ALLOWED_HEADERS = {
     "anthropic-version", "anthropic-beta", "x-app"
 }
 RETRY_STATUS_CODES = {500, 502, 503, 504}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 只在启用时创建并启动
@@ -31,7 +34,7 @@ async def lifespan(app: FastAPI):
     rl = None
     if rate_limit_config["RATE_LIMIT_ENABLED"]:
         rl = RateLimiter(
-            rpm=rate_limit_config["RATE_LIMIT_RPM"],   # 注意参数名是 rpm
+            rpm=rate_limit_config["RATE_LIMIT_RPM"],  # 注意参数名是 rpm
             burst_size=rate_limit_config["RATE_LIMIT_BURST_SIZE"]
         )
         await rl.start()
@@ -48,8 +51,11 @@ async def lifespan(app: FastAPI):
         if rl:
             await rl.close()
 
+
 app = FastAPI(title="CILRouter", description="Claude Code透明代理", version="1.0.2",
-              docs_url=None, redoc_url=None, openapi_url=None,lifespan=lifespan)
+              docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+
 @app.get("/")
 async def root():
     """根路径，返回当前状态"""
@@ -62,6 +68,7 @@ async def root():
         "供应商端点数目": current_provider_info.get("供应商端点数目"),
         "供应商端点": current_provider_info.get("供应商端点", [])
     }
+
 
 @app.post("/select")
 async def select_provider(request: Request):
@@ -90,6 +97,7 @@ async def select_provider(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
 async def forward_request(path: str, request: Request):
     """
@@ -103,7 +111,7 @@ async def forward_request(path: str, request: Request):
         auth_key = (config.get_request_config()["AUTH_KEY"]).strip()
         if auth_key:
             auth_header = (request.headers.get('authorization', '')).strip()
-            if not auth_header.lower().startswith('bearer ') :
+            if not auth_header.lower().startswith('bearer '):
                 return
             if auth_header[7:] != auth_key:
                 return
@@ -124,13 +132,13 @@ async def forward_request(path: str, request: Request):
         # 请求体
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
-        is_streaming = _is_streaming_request(headers,body)
+        is_streaming = _is_streaming_request(headers, body)
 
         config.get_current_provider_endpoint()
         if is_streaming:
-            return await _streaming_request(method,path,query_params, headers, body)
+            return await _streaming_request(method, path, query_params, headers, body)
         else:
-            return await normal_request(method,path,query_params, headers, body)
+            return await normal_request(method, path, query_params, headers, body)
 
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"转发请求失败: {str(e)}")
@@ -147,7 +155,7 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
     accept = (h.get("accept") or "").lower()
     if "text/event-stream" in accept or "application/stream" in accept:
         return True
-    
+
     if body:
         try:
             data = json.loads(body)
@@ -166,12 +174,13 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
 
     return False
 
+
 async def _streaming_request(
-    method: str,
-    path: str,
-    query_params: str,
-    headers: dict,
-    body: bytes,
+        method: str,
+        path: str,
+        query_params: str,
+        headers: dict,
+        body: bytes,
 ):
     """
     简洁版：仅替换上游 key，透明流式转发；网络异常最多重试 3 次。
@@ -218,12 +227,14 @@ async def _streaming_request(
             continue
 
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
+
+
 async def normal_request(
-    method: str,
-    path: str,
-    query_params: str,
-    headers: dict,   # 白名单后的 headers，已去掉 Authorization
-    body: bytes,
+        method: str,
+        path: str,
+        query_params: str,
+        headers: dict,  # 白名单后的 headers，已去掉 Authorization
+        body: bytes,
 ):
     """
     极简普通请求代理：
@@ -265,6 +276,7 @@ async def normal_request(
             continue
 
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
+
 
 # async def _handle_normal_request_with_retry(method: str, original_target_url: str, headers: dict,
 #                                             request: Request) -> Response:
