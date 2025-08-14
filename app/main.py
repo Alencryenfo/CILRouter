@@ -216,34 +216,29 @@ async def _streaming_request(
         client = httpx.AsyncClient(http2=True, timeout=timeout)
 
         try:
-            resp = await client.request(method, url, headers=up_headers, content=body, stream=True)
+            async with client.stream(method, url, headers=up_headers, content=body) as resp:
+                # 状态码重试
+                if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
+                    await client.aclose()
+                    await asyncio.sleep(2)
+                    continue
 
-            # 状态码重试
-            if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
-                await resp.aclose()
-                await client.aclose()
-                await asyncio.sleep(2)
-                continue
-
-            # 4) 用生成器托管 resp/client 生命周期
-            async def byte_iter():
-                try:
-                    async for chunk in resp.aiter_raw():
-                        yield chunk
-                finally:
-                    # 无论正常结束还是客户端断开，都确保资源关闭
+                # 4) 用生成器托管 resp/client 生命周期
+                async def byte_iter():
                     try:
-                        await resp.aclose()
+                        async for chunk in resp.aiter_raw():
+                            yield chunk
                     finally:
+                        # 无论正常结束还是客户端断开，都确保资源关闭
                         await client.aclose()
-            print(f"[proxy] {method} /{path} ? {query_params} streaming=True")
-            # 在两种请求返回前：
-            print(f"[proxy] upstream {url} -> {resp.status_code}")
-            return StreamingResponse(
-                byte_iter(),
-                status_code=resp.status_code,
-                headers=_strip_hop_headers(resp.headers, drop_encoding=False),
-            )
+                        
+                print(f"[proxy] {method} /{path} ? {query_params} streaming=True")
+                print(f"[proxy] upstream {url} -> {resp.status_code}")
+                return StreamingResponse(
+                    byte_iter(),
+                    status_code=resp.status_code,
+                    headers=_strip_hop_headers(resp.headers, drop_encoding=False),
+                )
 
         except Exception as e:
             last_exc = e
