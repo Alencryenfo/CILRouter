@@ -48,7 +48,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="CILRouter", description="Claude Code透明代理", version="1.0.2",
               docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
-
+app.add_middleware(
+    RateLimitMiddleware,
+    rate_limiter=rl,                            # 可能为 None；中间件内部需判断 enabled
+    enabled=RATE_LIMIT_ENABLED,
+    trust_proxy=rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
+)
 @app.get("/")
 async def root():
     """根路径，返回当前状态"""
@@ -216,6 +221,8 @@ async def _streaming_request(
                     )
         except Exception as e:
             last_exc = e
+            if attempt < 2:
+                await asyncio.sleep(2)
             continue
 
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
@@ -265,6 +272,8 @@ async def normal_request(
                 )
         except Exception as e:
             last_exc = e
+            if attempt < 2:
+                await asyncio.sleep(2)
             continue
 
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
