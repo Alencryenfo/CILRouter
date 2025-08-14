@@ -132,6 +132,7 @@ async def forward_request(path: str, request: Request):
 
         is_streaming = _is_streaming_request(headers, body)
 
+        print(method, path, query_params, headers, body)
         if is_streaming:
             return await _streaming_request(method, path, query_params, headers, body)
         else:
@@ -200,7 +201,7 @@ async def _streaming_request(
         up_headers.pop("host", None)
 
         try:
-            timeout = httpx.Timeout(connect=10.0, read=None, write=10.0)
+            timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
             async with httpx.AsyncClient(http2=True, timeout=timeout) as client:
                 async with client.stream(method, url, headers=up_headers, content=body) as resp:
                     # 状态码检查
@@ -256,7 +257,7 @@ async def normal_request(
         up_headers.pop("host", None)
 
         try:
-            timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0)
+            timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
             async with httpx.AsyncClient(http2=True, timeout=timeout) as client:
                 resp = await client.request(method, url, headers=up_headers, content=body)
 
