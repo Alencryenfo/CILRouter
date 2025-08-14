@@ -154,7 +154,7 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
     """
     h = {k.lower(): v for k, v in headers.items()}
     accept = (h.get("accept") or "").lower()
-    if "text/event-stream" in accept or "application/stream" in accept:
+    if "text/event-stream" in accept:
         return True
 
     if not body:
@@ -162,10 +162,8 @@ def _is_streaming_request(headers: dict, body: bytes) -> bool:
 
     try:
         data = json.loads(body)
-        # 仅看“顶层” stream
-        return isinstance(data, dict) and bool(data.get("stream") is True)
+        return isinstance(data, dict) and data.get("stream") is True
     except Exception:
-        # 解析失败 => 不冒进 (不认为是流式)
         return False
 
 def _strip_hop_headers(h: dict, drop_encoding: bool) -> dict:
