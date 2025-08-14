@@ -220,6 +220,16 @@ async def _streaming_request(
             # 不要提前关闭 client；交给 BackgroundTask
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             async with resp_cm as resp:
+                ct = (resp.headers.get("content-type") or "").lower()
+                is_sse = "text/event-stream" in ct
+                if not is_sse:
+                    # 上游并非 SSE，直接当普通响应返回，避免流读时序问题
+                    body_bytes = await resp.aread()
+                    return Response(
+                        content=body_bytes,
+                        status_code=resp.status_code,
+                        headers=_strip_hop_headers(resp.headers, drop_encoding=True),
+                    )
                 # 4) 遇 5xx 时重试
                 if resp.status_code in RETRY_STATUS_CODES and attempt < 2:
                     # 不返回，让 for attempt 重来；client 由 finally/BackgroundTask 兜底
