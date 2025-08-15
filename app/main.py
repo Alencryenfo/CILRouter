@@ -18,7 +18,7 @@ import anyio
 import asyncio
 
 logger = setup_logger(
-    log_level="INFO",
+    log_level=config.get_log_level(),
 )
 
 provider_lock = asyncio.Lock()
