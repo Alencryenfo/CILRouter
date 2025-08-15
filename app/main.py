@@ -17,8 +17,6 @@ from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
 import anyio
 import asyncio
 
-from starlette.background import BackgroundTask
-
 
 provider_lock = asyncio.Lock()
 ALLOWED_HEADERS = {
@@ -194,8 +192,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                 last = b""
                 try:
                     async for chunk in resp.aiter_bytes():
-                        total += len(chunk);
+                        total += len(chunk)
                         last = chunk
+                        if b'"message_stop"' in chunk:
+                            print("[sse] stop seen")
                         yield chunk
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
@@ -240,4 +240,4 @@ if __name__ == "__main__":
     print(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     print(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
     print(f"🎯 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
-    uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'])
+    uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'],http="h11", timeout_keep_alive=120)
