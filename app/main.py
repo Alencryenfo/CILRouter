@@ -12,7 +12,7 @@ import os
 from contextlib import asynccontextmanager
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import config.config as config
+from app.config import config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
 import anyio
 import asyncio
@@ -250,17 +250,6 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
 if __name__ == "__main__":
     import uvicorn
-    print("日志测试")
-    print("成功")
-    print("sucess")
-    print("警告")
-    print("warning")
-    print("错误")
-    print("error")
-    print("调试")
-    print("debug")
-    print("信息")
-    print("info")
     server_config = config.get_server_config()
     print(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     print(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
