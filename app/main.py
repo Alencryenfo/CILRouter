@@ -176,7 +176,27 @@ async def forward_request(path: str, request: Request):
 
 def _strip_hop_headers(h: dict) -> dict:
     return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
+async def sse_passthrough(resp, ping_every: int = 25):
+    """
+    上游是 SSE 时逐字节回放；仅在收到“首块之后”才注入心跳 : ping\\n\\n。
+    避免客户端在 message_start 之前看到心跳而判定为空。
+    """
+    aiter = resp.aiter_bytes().__aiter__()
+    started = False
 
+    while True:
+        try:
+            # 如果已经开始，就用心跳超时；没开始就一直等第一块
+            timeout = ping_every if started else None
+            chunk = await asyncio.wait_for(aiter.__anext__(), timeout=timeout)
+            started = True
+            yield chunk
+        except asyncio.TimeoutError:
+            # 上游静默，但流已开始：发一个 SSE 注释帧作为心跳
+            # （只有在 started=True 后才会进入这里）
+            yield b": ping\n\n"
+        except StopAsyncIteration:
+            break
 async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes):
     last_exc = None
     attempts = 3
@@ -203,14 +223,16 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
 
+            is_sse = "text/event-stream" in (resp.headers.get("content-type","").lower())
+
             async def byte_iter():
                 try:
-                    async for chunk in resp.aiter_bytes():
-                        yield chunk
-                except (httpx.StreamClosed, httpx.ReadError,
-                        httpx.RemoteProtocolError, anyio.EndOfStream,
-                        anyio.ClosedResourceError, asyncio.CancelledError):
-                    return
+                    if is_sse:
+                        async for chunk in sse_passthrough(resp, ping_every=25):
+                            yield chunk
+                    else:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
                 finally:
                     try:
                         await resp_cm.__aexit__(None, None, None)
