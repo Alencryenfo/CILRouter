@@ -131,7 +131,7 @@ async def root(request: Request):
 
 @app.get("/favicon.ico")
 async def favicon():
-    return RedirectResponse("https://linux.do/favicon.ico")
+    return RedirectResponse("https://api-status.alencryenfo.work/status/claudecode-pub")
 @app.post("/select")
 async def select_provider(request: Request):
     """
