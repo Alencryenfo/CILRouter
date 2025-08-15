@@ -131,7 +131,7 @@ async def root(request: Request):
 
 @app.get("/favicon.ico")
 async def favicon():
-    return RedirectResponse("https://example.com/favicon.ico")
+    return RedirectResponse("https://linux.do/favicon.ico")
 @app.post("/select")
 async def select_provider(request: Request):
     """
