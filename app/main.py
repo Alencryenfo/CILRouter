@@ -93,8 +93,6 @@ async def root():
         "当前版本": "1.0.2",
         "当前供应商": config.CURRENT_PROVIDER_INDEX,
         "全部供应商信息": config.get_all_providers_info(),
-        "供应商端点数目": current_provider_info.get("供应商端点数目"),
-        "供应商端点": current_provider_info.get("供应商端点", [])
     }
 
 
