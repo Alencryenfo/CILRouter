@@ -157,18 +157,10 @@ def _strip_hop_headers(h: dict) -> dict:
         out.pop(k, None)
     return out
 async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes):
-    """
-    几乎透明的统一代理：
-    - 不做流式/普通判断；始终使用 client.stream 读取上游，再以 StreamingResponse 原样回放
-    - 不改 content-type / content-encoding 等实体头（仅剔除逐跳头）
-    - 吞掉上游/下游常见中断异常，避免 ExceptionGroup 噪音
-    - （可选）对传输类错误重试，默认关闭
-    """
     last_exc = None
     attempts = 3
 
     for attempt in range(1, attempts + 1):
-        # 1) 取端点（加锁）
         async with provider_lock:
             ep = config.get_current_provider_endpoint()
 
@@ -177,18 +169,18 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         if query_params:
             url = f"{url}?{query_params}"
 
-        # 2) 上游请求头（仅替换 Authorization；其他尽量原样）
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers.pop("host", None)
+        # 可选：避免压缩对 SSE 造成干扰
+        # up_headers.pop("accept-encoding", None)
 
-        # 3) httpx 客户端（建议禁 H2，SSE/多层代理更稳）
-        timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-        limits = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
+        timeout   = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        limits    = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
         transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
+        client    = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
 
-        client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
-
+        handed_off = False  # 关键：标记是否已把关闭责任交给生成器
         try:
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
@@ -202,12 +194,13 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         anyio.ClosedResourceError, asyncio.CancelledError):
                     return
                 finally:
-                    # 这里才真正关闭上游流和 client
+                    # 生成器结束时再统一收尾
                     try:
                         await resp_cm.__aexit__(None, None, None)
                     finally:
                         await client.aclose()
 
+            handed_off = True  # 已把关闭责任交给生成器
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
@@ -219,15 +212,16 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         except Exception as e:
             last_exc = e
         finally:
-            try:
-                await client.aclose()
-            except Exception:
-                pass
+            # 只有在“没有交付流”的情况下，才由这里关闭资源
+            if not handed_off:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
 
         if attempt < attempts:
-            await asyncio.sleep(0.8 * (2 ** (attempt - 1)))  # 退避
+            await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
 
-    # 到这一步说明整个请求都没建成（不是读流中断），给 502
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
 
 if __name__ == "__main__":
