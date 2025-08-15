@@ -294,8 +294,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             )
 
         except TRANSIENT_EXC as e:
+            logger.warning(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(e)}")
             last_exc = e
         except Exception as e:
+            logger.warning(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(e)}")
             last_exc = e
         finally:
             # 只有在“没有交付流”的情况下，才由这里关闭资源
@@ -307,7 +309,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
         if attempt < attempts:
             await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
-
+    logger.error(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(last_exc)}")
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
 
 if __name__ == "__main__":
