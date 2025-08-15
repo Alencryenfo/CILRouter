@@ -143,25 +143,25 @@ async def select_provider(request: Request):
         body = await request.body()
         index = int(body.decode().strip())
         if config.set_provider_index(index):
-            logger.info(f"IP:{IP}访问端点 /select 成功，切换到供应商 {index}")
+            logger.info(f"IP:{IP}访问端点 /select➡️成功，切换到供应商 {index}")
             return {
                 "success": True,
                 "message": f"已切换到供应商 {index}",
                 "供应商信息": config.get_provider_info(index)
             }
         else:
-            logger.warning(f"IP:{IP}访问端点 /select 失败，索引 {index} 无效")
+            logger.warning(f"IP:{IP}访问端点 /select➡️失败，索引 {index} 无效")
             raise HTTPException(
                 status_code=400,
                 detail=f"无效的供应商索引 {index}"
             )
     except ValueError:
-        logger.error(f"IP:{IP}访问端点 /select 发生错误: 请求体不是一个数字")
+        logger.error(f"IP:{IP}访问端点 /select➡️发生错误: 请求体不是一个数字")
         raise HTTPException(status_code=400, detail="请求体不是一个数字")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"IP:{IP}访问端点 /select 发生错误: {str(e)}")
+        logger.error(f"IP:{IP}访问端点 /select➡️发生错误: {str(e)}")
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
 
@@ -181,10 +181,10 @@ async def forward_request(path: str, request: Request):
         if auth_key:
             auth_header = (request.headers.get('authorization', '')).strip()
             if not auth_header.lower().startswith('bearer '):
-                logger.warning(f"IP:{IP}访问端点 /{path} 鉴权失败: 缺少Bearer令牌")
+                logger.warning(f"IP:{IP}访问端点 /{path}➡️鉴权失败: 缺少Bearer令牌")
                 raise HTTPException(status_code=401, detail="缺少鉴权令牌")
             if auth_header[7:] != auth_key:
-                logger.warning(f"IP:{IP}访问端点 /{path} 鉴权失败: 令牌无效")
+                logger.warning(f"IP:{IP}访问端点 /{path}➡️鉴权失败: 令牌无效")
                 raise HTTPException(status_code=401, detail="令牌无效")
 
         # 请求方法
@@ -206,7 +206,7 @@ async def forward_request(path: str, request: Request):
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
         logger.info(
-            f"IP:{IP}访问端点 /{path} 转发请求➡️"
+            f"IP:{IP}访问端点 /{path}➡️转发请求➡️"
             f"方法: {method}"
             f"{('，参数: ' + str(query_params)) if query_params else ''}➡️"
             f"请求头: {headers}➡️"
@@ -216,11 +216,11 @@ async def forward_request(path: str, request: Request):
         return await _proxy_request(method, path, query_params, headers, body,IP)
 
     except httpx.HTTPError as e:
-        logger.error(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(e)}")
+        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
         raise HTTPException(status_code=502, detail=f"转发请求失败: {str(e)}")
 
     except Exception as e:
-        logger.error(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(e)}")
+        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
 def _strip_hop_headers(h: dict) -> dict:
@@ -267,17 +267,17 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         yield chunk
                     if firstres or lstres:
                         logger.info(
-                            f"IP:{IP}访问端点 /{path} 转发请求响应体: "
+                            f"IP:{IP}访问端点 /{path}➡️转发请求响应体: "
                             f"➡️{firstres.decode('utf-8', errors='replace')}......"
                             f"{lstres.decode('utf-8', errors='replace')}⬅️"
                         )
                     else:
-                        logger.warning(f"IP:{IP}访问端点 /{path} 转发请求响应体为空")
+                        logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
 
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
-                    logger.warning(f"IP:{IP}访问端点 /{path} 转发请求响应流异常，可能是连接中断或超时")
+                    logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应流异常，可能是连接中断或超时")
                     return
                 finally:
                     try:
@@ -286,7 +286,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         await client.aclose()
 
             handed_off = True  # 已把关闭责任交给生成器
-            logger.info(f"IP:{IP}访问端点 /{path} 转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
+            logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
@@ -294,10 +294,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             )
 
         except TRANSIENT_EXC as e:
-            logger.warning(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(e)}")
+            logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
             last_exc = e
         except Exception as e:
-            logger.warning(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(e)}")
+            logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
             last_exc = e
         finally:
             # 只有在“没有交付流”的情况下，才由这里关闭资源
@@ -309,7 +309,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
         if attempt < attempts:
             await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
-    logger.error(f"IP:{IP}访问端点 /{path} 转发请求失败: {str(last_exc)}")
+    logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(last_exc)}")
     raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ def setup_logger(
     
     # 创建格式化器
     console_formatter = logging.Formatter(
-        '[%(asctime)sZ|%(levelname)s|%(pathname)s:%(lineno)d]%(message)s',
+        '[%(levelname)s][%(asctime)sZ|%(pathname)s:%(lineno)d]%(message)s',
         datefmt='%Y-%m-%dT%H:%M:%S'
     )
     console_handler = logging.StreamHandler(sys.stdout)
