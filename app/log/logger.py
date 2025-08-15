@@ -8,7 +8,7 @@ import logging
 import sys
 
 def setup_logger(
-    log_level: str = "INFO",
+    log_level: str,
 ) -> logging.Logger:
     """
     设置日志配置
