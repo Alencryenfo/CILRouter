@@ -161,10 +161,7 @@ async def forward_request(path: str, request: Request):
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
 def _strip_hop_headers(h: dict) -> dict:
-    out = dict(h)
-    for k in HOP_HEADERS:
-        out.pop(k, None)
-    return out
+    return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
 
 async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes):
     last_exc = None
