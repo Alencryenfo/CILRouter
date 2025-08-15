@@ -5,12 +5,11 @@ CIL Router - 极简版 Claude API 转发器
 """
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse,RedirectResponse
 import httpx
 import sys
 import os
 from contextlib import asynccontextmanager
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
@@ -130,7 +129,9 @@ async def root(request: Request):
         "全部供应商信息": config.get_all_providers_info(),
     }
 
-
+@app.get("/favicon.ico")
+async def favicon():
+    return RedirectResponse("https://example.com/favicon.ico")
 @app.post("/select")
 async def select_provider(request: Request):
     """
@@ -319,8 +320,8 @@ if __name__ == "__main__":
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).disabled = True
     # 启动前日志
-    logger.info(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
-    logger.info(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
-    logger.info(f"🎯 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
+    logger.info(f"✅ 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
+    logger.info(f"✅ 配置了 {len(config.get_all_providers_info())} 个供应商")
+    logger.info(f"✅ 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
     
     uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'],http="h11", timeout_keep_alive=120,access_log=False)
