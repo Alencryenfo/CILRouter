@@ -206,10 +206,10 @@ async def forward_request(path: str, request: Request):
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
         logger.info(
-            f"IP:{IP}访问端点 /{path} 转发请求\n"
+            f"IP:{IP}访问端点 /{path} 转发请求|"
             f"方法: {method}"
-            f"{('，参数: ' + str(query_params)) if query_params else ''}\n"
-            f"请求头: {headers}\n"
+            f"{('，参数: ' + str(query_params)) if query_params else ''}|"
+            f"请求头: {headers}|"
             f"请求体: {(body[:100] if body else '')}... (总长度: {len(body) if body else 0} bytes)"
         )
 
