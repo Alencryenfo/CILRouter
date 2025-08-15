@@ -23,7 +23,6 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # 复制应用代码和配置
 COPY app/ ./app/
-COPY config/ ./config/
 
 # 创建必要的目录
 RUN mkdir -p /app/logs \
