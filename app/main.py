@@ -190,15 +190,19 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             resp = await resp_cm.__aenter__()
 
             async def byte_iter():
+                total = 0
+                last = b""
                 try:
                     async for chunk in resp.aiter_bytes():
+                        total += len(chunk);
+                        last = chunk
                         yield chunk
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
                     return
                 finally:
-                    # 生成器结束时再统一收尾
+                    print(f"[sse] bytes={total} last={last[:80]!r}")
                     try:
                         await resp_cm.__aexit__(None, None, None)
                     finally:
