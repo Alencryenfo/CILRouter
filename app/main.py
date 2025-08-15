@@ -165,8 +165,11 @@ async def forward_request(path: str, request: Request):
 
 
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
+        print("转发请求：")
+        print(method, path, query_params)
+        print(headers)
+        print(body[:200])
 
-        print(method, path, query_params, headers, body[:50])
         return await _proxy_request(method, path, query_params, headers, body)
 
     except httpx.HTTPError as e:
@@ -205,8 +208,12 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
             async def byte_iter():
                 try:
+                    last_chunk = None
                     async for chunk in resp.aiter_bytes():
+                        last_chunk = chunk
                         yield chunk
+                    print("最后一个块：")
+                    print(last_chunk)
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
@@ -218,7 +225,8 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         await client.aclose()
 
             handed_off = True  # 已把关闭责任交给生成器
-            print(resp.status_code, resp.headers)
+            print("响应头：")
+            print(resp.headers)
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
