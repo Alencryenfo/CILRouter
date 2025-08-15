@@ -38,7 +38,7 @@ HOST: str = os.getenv('HOST', '0.0.0.0')
 PORT: int = int(os.getenv('PORT', '8000'))
 
 # 日志级别
-LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
+LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO').upper()
 
 # 供应商配置
 PROVIDERS: List[Dict[str, List[str]]] = load_providers_from_env()
@@ -121,7 +121,7 @@ def get_rate_limit_config() -> Dict[str, Any]:
 def reload_config():
     """重新加载配置（主要用于运行时更新环境变量）"""
     global CNT,PROVIDERS, CURRENT_PROVIDER_INDEX, REQUEST_TIMEOUT, STREAM_TIMEOUT, HOST, PORT, AUTH_KEY, RATE_LIMIT_ENABLED, \
-        RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY,OG_LEVEL
+        RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY,LOG_LEVEL
 
     CNT = 0
 
@@ -130,7 +130,7 @@ def reload_config():
     PORT= int(os.getenv('PORT', '8000'))
 
     # 日志级别
-    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 
     # 供应商配置
     PROVIDERS = load_providers_from_env()
