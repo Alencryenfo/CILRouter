@@ -106,12 +106,14 @@ class RateLimiter:
             # 首次调用时清理过期的桶
             if key not in self.buckets:
                 self.buckets[key] = self._create_bucket()
-                logger.info(f"🆕IP:{key}➡️创建新令牌桶➡️容量:{self.rpm}➡️突发:{self.burst_size}")
+                if not key == "127.0.0.1":
+                    logger.info(f"🆕IP:{key}➡️创建新令牌桶➡️容量:{self.rpm}➡️突发:{self.burst_size}")
             bucket = self.buckets[key]
             self._update_tokens(bucket)
             if bucket.tokens >= 1.0:
                 bucket.tokens -= 1.0
-                logger.info(f"🔋限流检查➡️IP:{key}➡️结果:允许➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}")
+                if not key == "127.0.0.1":
+                    logger.info(f"🔋限流检查➡️IP:{key}➡️结果:允许➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}")
                 return True
             else:
                 logger.warning(f"🪫限流检查➡️IP:{key}➡️结果:拒绝➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}➡️速率:{bucket.refill_rate:.2f}/秒")

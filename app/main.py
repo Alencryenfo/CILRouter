@@ -121,7 +121,9 @@ def get_request_ip(request: Request) -> str:
 @app.get("/")
 async def root(request: Request):
     """根路径，返回当前状态"""
-    logger.info(f"IP:{get_request_ip(request)}访问端点 /")
+    IP = get_request_ip(request)
+    if not IP == "127.0.0.1":
+        logger.info(f"IP:{get_request_ip(request)}访问端点 /")
     return {
         "应用名称": "CIL Router",
         "当前版本": "1.0.2",
