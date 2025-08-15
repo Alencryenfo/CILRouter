@@ -19,11 +19,34 @@ import asyncio
 
 
 provider_lock = asyncio.Lock()
-ALLOWED_HEADERS = {
-    "authorization", "content-type", "accept", "user-agent",
-    "accept-language", "accept-encoding",
-    "anthropic-version", "anthropic-beta", "x-app"
-}
+PROHIBIT_HEADERS = {
+    # 逐跳 / 连接管理
+    "authorization","Authorization",
+    "host","Host",
+    "connection","Connection",
+    "keep-alive","Keep-Alive",
+    "proxy-connection","Proxy-Connection",
+    "transfer-encoding","Transfer-Encoding",
+    "te","TE",
+    "trailer","Trailer",
+    "upgrade","Upgrade",
+
+    # 长度 / 期望（交给 httpx 自己计算）
+    "content-length","Content-Length",
+    "expect","Expect",
+
+    # CDN / 代理痕迹（固定名）
+    "cdn-loop","CDN-Loop",
+    "x-forwarded-for","X-Forwarded-For",
+    "x-forwarded-proto","X-Forwarded-Proto",
+    "x-forwarded-host","X-Forwarded-Host",
+    "x-forwarded-server","X-Forwarded-Server",
+    "x-forwarded-port","X-Forwarded-Port",
+    "x-real-ip","X-Real-IP",
+    "true-client-ip","True-Client-IP",
+    "via","Via",
+    "forwarded","Forwarded",
+    }
 
 HOP_HEADERS = ("transfer-encoding","content-length","connection","keep-alive",
                "proxy-connection","upgrade","te","trailer")
@@ -131,23 +154,16 @@ async def forward_request(path: str, request: Request):
         # 目标URL
         query_params = str(request.url.query)
 
-        # 请求头
+        # 请求头处理
         headers = dict(request.headers)
-
-        # 仅删除这些不应转发/必须由我们接管的头；其余一律保留
-        for k in (
-                "authorization", "Authorization",  # 来路鉴权，交给上游 Key
-                "host", "Host",  # Host 由 httpx/HTTP2 的 :authority 处理
-                "connection", "Connection",
-                "keep-alive", "Keep-Alive",
-                "proxy-connection", "Proxy-Connection",
-                "transfer-encoding", "Transfer-Encoding",
-                "te", "TE",
-                "trailer", "Trailer",
-                "upgrade", "Upgrade",
-        ):
+        for k in PROHIBIT_HEADERS:
             headers.pop(k, None)
-        # 请求体
+        for k in list(headers.keys()):
+            kl = k.lower()
+            if kl.startswith(("cf-", "cf-access-")):
+                headers.pop(k, None)
+
+
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
         print(method, path, query_params, headers, body[:50])
@@ -188,25 +204,14 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             resp = await resp_cm.__aenter__()
 
             async def byte_iter():
-                total = 0
-                last = b""
                 try:
-                    first = True
                     async for chunk in resp.aiter_bytes():
-                        if first:
-                            print("[sse] first-chunk", repr(chunk[:120]))
-                            first = False
-                        total += len(chunk)
-                        last = chunk
-                        if b'"message_stop"' in chunk:
-                            print("[sse] stop seen")
                         yield chunk
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
                     return
                 finally:
-                    print(f"[sse] bytes={total} last={last[:80]!r}")
                     try:
                         await resp_cm.__aexit__(None, None, None)
                     finally:
