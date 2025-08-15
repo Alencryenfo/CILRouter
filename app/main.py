@@ -57,10 +57,6 @@ TRANSIENT_EXC = (
     httpx.RemoteProtocolError, httpx.PoolTimeout,
 )
 
-RETRY_STATUS_CODES = {500, 502, 503, 504}
-
-
-
 rate_limit_config = config.get_rate_limit_config()
 RATE_LIMIT_ENABLED = rate_limit_config["RATE_LIMIT_ENABLED"]
 rl = RateLimiter(
@@ -254,7 +250,17 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
 if __name__ == "__main__":
     import uvicorn
-
+    print("日志测试")
+    print("成功")
+    print("sucess")
+    print("警告")
+    print("warning")
+    print("错误")
+    print("error")
+    print("调试")
+    print("debug")
+    print("信息")
+    print("info")
     server_config = config.get_server_config()
     print(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     print(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
