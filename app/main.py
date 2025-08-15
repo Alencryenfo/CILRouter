@@ -315,7 +315,9 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 if __name__ == "__main__":
     import uvicorn
     server_config = config.get_server_config()
-
+    import logging
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        logging.getLogger(name).disabled = True
     # 启动前日志
     logger.info(f"🚀 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     logger.info(f"📡 配置了 {len(config.get_all_providers_info())} 个供应商")
