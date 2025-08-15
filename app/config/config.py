@@ -7,7 +7,6 @@
 import os
 from typing import List, Dict, Any
 
-
 def load_providers_from_env() -> List[Dict[str, List[str]]]:
     """
     从环境变量加载供应商配置
@@ -38,6 +37,9 @@ CNT = 0
 HOST: str = os.getenv('HOST', '0.0.0.0')
 PORT: int = int(os.getenv('PORT', '8000'))
 
+# 日志级别
+LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
+
 # 供应商配置
 PROVIDERS: List[Dict[str, List[str]]] = load_providers_from_env()
 CURRENT_PROVIDER_INDEX: int = 0
@@ -61,6 +63,9 @@ def get_server_config() -> Dict[str, Any]:
         "PORT": PORT
     }
 
+def get_log_level() -> str:
+    """获取日志级别"""
+    return LOG_LEVEL
 
 def get_provider_info(index: int) -> Dict[str, Any]:
     """获取指定供应商的详细信息"""
@@ -116,13 +121,16 @@ def get_rate_limit_config() -> Dict[str, Any]:
 def reload_config():
     """重新加载配置（主要用于运行时更新环境变量）"""
     global CNT,PROVIDERS, CURRENT_PROVIDER_INDEX, REQUEST_TIMEOUT, STREAM_TIMEOUT, HOST, PORT, AUTH_KEY, RATE_LIMIT_ENABLED, \
-        RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY
+        RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY,OG_LEVEL
 
     CNT = 0
 
     # 服务器配置
     HOST= os.getenv('HOST', '0.0.0.0')
     PORT= int(os.getenv('PORT', '8000'))
+
+    # 日志级别
+    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
     # 供应商配置
     PROVIDERS = load_providers_from_env()

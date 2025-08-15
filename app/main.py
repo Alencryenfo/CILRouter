@@ -239,7 +239,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         url = f"{base_url}/{path.lstrip('/')}"
         if query_params:
             url = f"{url}?{query_params}"
-
+        logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Key: {ep['api_key'][:5]}")
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers["accept-encoding"] = "identity"
