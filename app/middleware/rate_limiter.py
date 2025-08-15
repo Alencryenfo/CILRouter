@@ -12,8 +12,9 @@ from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 import ipaddress
 from app.log import setup_logger
+from app.config import config
 
-logger = setup_logger(log_level="INFO")
+logger = setup_logger(log_level=config.get_log_level())
 @dataclass
 class TokenBucket:
     """令牌桶数据结构"""
