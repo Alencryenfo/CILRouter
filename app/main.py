@@ -176,6 +176,40 @@ async def forward_request(path: str, request: Request):
 
 def _strip_hop_headers(h: dict) -> dict:
     return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
+async def sse_passthrough(resp, ping_every: int = 25):
+    """
+    将上游 SSE 字节流逐字节回放；在上游静默超过 ping_every 秒时，注入合法心跳帧(: ping\\n\\n)。
+    """
+    q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=1)
+
+    async def reader():
+        try:
+            async for chunk in resp.aiter_bytes():
+                # 若队列里已有旧数据就覆盖（避免堆积）
+                if q.full():
+                    try: q.get_nowait()
+                    except asyncio.QueueEmpty: pass
+                await q.put(chunk)
+        finally:
+            # 用 None 标记结束
+            try: await q.put(None)
+            except Exception: pass
+
+    reader_task = asyncio.create_task(reader())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(q.get(), timeout=ping_every)
+            except asyncio.TimeoutError:
+                # 上游静默：发一个 SSE 注释作为心跳
+                yield b": ping\n\n"
+                continue
+
+            if item is None:
+                break  # 上游结束
+            yield item
+    finally:
+        reader_task.cancel()
 
 async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes):
     last_exc = None
@@ -203,10 +237,16 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
 
+            is_sse = "text/event-stream" in (resp.headers.get("content-type", "")).lower()
+
             async def byte_iter():
                 try:
-                    async for chunk in resp.aiter_bytes():
-                        yield chunk
+                    if is_sse:
+                        async for chunk in sse_passthrough(resp, ping_every=25):
+                            yield chunk
+                    else:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
