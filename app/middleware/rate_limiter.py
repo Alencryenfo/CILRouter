@@ -53,7 +53,7 @@ class RateLimiter:
 
     async def _cleanup_task(self):
         """后台每隔 cleanup_interval 秒清理过期桶"""
-        logger.info("✅ 限流清理任务已启动")
+        logger.info("✅ ♻️限流清理任务已启动")
         try:
             while True:
                 await asyncio.sleep(60)
@@ -64,12 +64,12 @@ class RateLimiter:
                         if now - b.last_refill > 120  # 120秒未使用的桶将被清理
                     ]
                     if keys_to_delete:
-                        logger.info(f"限流清理任务➡️清理过期桶➡️数量:{len(keys_to_delete)}➡️IP列表:{keys_to_delete}")
+                        logger.info(f"♻️限流清理任务➡️清理过期桶➡️数量:{len(keys_to_delete)}➡️IP列表:{keys_to_delete}")
                     for k in keys_to_delete:
                         del self.buckets[k]
-                    logger.info(f"限流清理任务➡️当前活跃桶数:{len(self.buckets)}")
+                    logger.info(f"♻️限流清理任务➡️当前活跃桶数:{len(self.buckets)}")
         except asyncio.CancelledError:
-            logger.info("✅ 限流清理任务已停止")
+            logger.info("✅ ♻️限流清理任务已停止")
             return
 
     def _create_bucket(self) -> TokenBucket:
@@ -106,15 +106,15 @@ class RateLimiter:
             # 首次调用时清理过期的桶
             if key not in self.buckets:
                 self.buckets[key] = self._create_bucket()
-                logger.info(f"IP:{key}➡️创建新令牌桶➡️容量:{self.rpm}➡️突发:{self.burst_size}")
+                logger.info(f"🆕IP:{key}➡️创建新令牌桶➡️容量:{self.rpm}➡️突发:{self.burst_size}")
             bucket = self.buckets[key]
             self._update_tokens(bucket)
             if bucket.tokens >= 1.0:
                 bucket.tokens -= 1.0
-                logger.info(f"限流检查➡️IP:{key}➡️结果:允许➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}")
+                logger.info(f"🔋限流检查➡️IP:{key}➡️结果:允许➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}")
                 return True
             else:
-                logger.warning(f"限流检查➡️IP:{key}➡️结果:拒绝➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}➡️速率:{bucket.refill_rate:.2f}/秒")
+                logger.warning(f"🪫限流检查➡️IP:{key}➡️结果:拒绝➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}➡️速率:{bucket.refill_rate:.2f}/秒")
                 return False
 
 
@@ -186,7 +186,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = self._get_client_ip(request)
         # 检查是否允许请求
         if not await self.rate_limiter.check(client_ip):
-            logger.warning(f"限流检查➡️IP:{client_ip}➡️触发限流➡️返回429错误")
+            logger.warning(f"❌限流检查➡️IP:{client_ip}➡️触发限流➡️返回429错误")
             raise HTTPException(status_code=429, detail="Too Many Requests")
 
         return await call_next(request)
