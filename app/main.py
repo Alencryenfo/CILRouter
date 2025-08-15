@@ -173,7 +173,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers.pop("host", None)
         # 可选：避免压缩对 SSE 造成干扰
-        # up_headers.pop("accept-encoding", None)
+        up_headers.pop("accept-encoding", None)
 
         timeout   = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
         limits    = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
