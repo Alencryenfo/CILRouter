@@ -190,24 +190,29 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
 
         try:
-            async with client.stream(method, url, headers=up_headers, content=body) as resp:
-                # 统一用字节生成器回放
-                async def byte_iter():
-                    try:
-                        async for chunk in resp.aiter_bytes():
-                            yield chunk
-                    except (httpx.StreamClosed, httpx.ReadError,
-                            httpx.RemoteProtocolError, anyio.EndOfStream,
-                            anyio.ClosedResourceError, asyncio.CancelledError):
-                        # 上游提前关闭 / 下游断开 / 任务取消：都当作正常结束
-                        return
+            resp_cm = client.stream(method, url, headers=up_headers, content=body)
+            resp = await resp_cm.__aenter__()
 
-                return StreamingResponse(
-                    byte_iter(),
-                    status_code=resp.status_code,
-                    headers=_strip_hop_headers(resp.headers),
-                    background=BackgroundTask(client.aclose),
-                )
+            async def byte_iter():
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+                except (httpx.StreamClosed, httpx.ReadError,
+                        httpx.RemoteProtocolError, anyio.EndOfStream,
+                        anyio.ClosedResourceError, asyncio.CancelledError):
+                    return
+                finally:
+                    # 这里才真正关闭上游流和 client
+                    try:
+                        await resp_cm.__aexit__(None, None, None)
+                    finally:
+                        await client.aclose()
+
+            return StreamingResponse(
+                byte_iter(),
+                status_code=resp.status_code,
+                headers=_strip_hop_headers(resp.headers),
+            )
 
         except TRANSIENT_EXC as e:
             last_exc = e
