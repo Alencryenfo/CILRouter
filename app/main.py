@@ -213,7 +213,7 @@ async def forward_request(path: str, request: Request):
             f"方法: {method}"
             f"{('，参数: ' + str(query_params)) if query_params else ''}➡️"
             f"请求头: {headers}➡️"
-            f"请求体: {(body[:100] if body else '')}... (总长度: {len(body) if body else 0} bytes)"
+            f"请求体: {(body[:200] if body else '')}... (总长度: {len(body) if body else 0} bytes)"
         )
 
         return await _proxy_request(method, path, query_params, headers, body,IP)
