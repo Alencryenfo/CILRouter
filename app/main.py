@@ -115,7 +115,7 @@ def get_request_ip(request: Request) -> str:
     # 5. 最后使用连接IP
     if request.client and hasattr(request.client, 'host') and request.client.host:
         return request.client.host
-    logger.warning("无法获取客户端IP，需要检查可能的攻击")
+    logger.warning("❌无法获取客户端IP，需要检查可能的攻击")
     return "unknown-client"
 
 @app.get("/")
@@ -151,7 +151,7 @@ async def select_provider(request: Request):
                 "供应商信息": config.get_provider_info(index)
             }
         else:
-            logger.warning(f"IP:{IP}访问端点 /select➡️失败，索引 {index} 无效")
+            logger.warning(f"❌IP:{IP}访问端点 /select➡️失败，索引 {index} 无效")
             raise HTTPException(
                 status_code=400,
                 detail=f"无效的供应商索引 {index}"
@@ -182,10 +182,10 @@ async def forward_request(path: str, request: Request):
         if auth_key:
             auth_header = (request.headers.get('authorization', '')).strip()
             if not auth_header.lower().startswith('bearer '):
-                logger.warning(f"IP:{IP}访问端点 /{path}➡️鉴权失败: 缺少Bearer令牌")
+                logger.warning(f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 缺少Bearer令牌")
                 raise HTTPException(status_code=401, detail="缺少鉴权令牌")
             if auth_header[7:] != auth_key:
-                logger.warning(f"IP:{IP}访问端点 /{path}➡️鉴权失败: 令牌无效")
+                logger.warning(f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 令牌无效")
                 raise HTTPException(status_code=401, detail="令牌无效")
 
         # 请求方法
@@ -273,12 +273,12 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                             f"{lstres.decode('utf-8', errors='replace')}⬅️"
                         )
                     else:
-                        logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
+                        logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
 
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
-                    logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应流异常，可能是连接中断或超时")
+                    logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应流异常，可能是连接中断或超时")
                     return
                 finally:
                     try:
@@ -295,10 +295,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             )
 
         except TRANSIENT_EXC as e:
-            logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
             last_exc = e
         except Exception as e:
-            logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
             last_exc = e
         finally:
             # 只有在“没有交付流”的情况下，才由这里关闭资源
