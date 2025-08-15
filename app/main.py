@@ -134,12 +134,21 @@ async def forward_request(path: str, request: Request):
         query_params = str(request.url.query)
 
         # 请求头
-        headers = {
-            k: v for k, v in request.headers.items()
-            if k.lower() in ALLOWED_HEADERS or k.lower().startswith("anthropic-")
-        }
-        headers.pop('authorization', None)
-        headers.pop('Authorization', None)
+        headers = dict(request.headers)
+
+        # 仅删除这些不应转发/必须由我们接管的头；其余一律保留
+        for k in (
+                "authorization", "Authorization",  # 来路鉴权，交给上游 Key
+                "host", "Host",  # Host 由 httpx/HTTP2 的 :authority 处理
+                "connection", "Connection",
+                "keep-alive", "Keep-Alive",
+                "proxy-connection", "Proxy-Connection",
+                "transfer-encoding", "Transfer-Encoding",
+                "te", "TE",
+                "trailer", "Trailer",
+                "upgrade", "Upgrade",
+        ):
+            headers.pop(k, None)
         # 请求体
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
