@@ -49,7 +49,7 @@ PROHIBIT_HEADERS = {
     }
 
 HOP_HEADERS = ("transfer-encoding","content-length","connection","keep-alive",
-               "proxy-connection","upgrade","te","trailer")
+               "proxy-connection","upgrade","te","trailer", "content-encoding")
 
 TRANSIENT_EXC = (
     httpx.ConnectError, httpx.ConnectTimeout,
@@ -195,8 +195,9 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
+        up_headers["accept-encoding"] = "identity"
 
-        timeout   = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        timeout   = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
         limits    = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
         transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
         client    = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
@@ -208,12 +209,13 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
 
             async def byte_iter():
                 try:
-                    last_chunk = None
+                    print("开始读取上游字节…")  # 进 generator 就打一行
+                    idx = 0
                     async for chunk in resp.aiter_bytes():
-                        last_chunk = chunk
+                        idx += 1
+                        print(f"chunk#{idx}: {len(chunk)} bytes")
                         yield chunk
-                    print("最后一个块：")
-                    print(last_chunk)
+                    print(f"流结束，共 {idx} 个 chunk")
                 except (httpx.StreamClosed, httpx.ReadError,
                         httpx.RemoteProtocolError, anyio.EndOfStream,
                         anyio.ClosedResourceError, asyncio.CancelledError):
