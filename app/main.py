@@ -5,7 +5,7 @@ CIL Router - 极简版 Claude API 转发器
 """
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse,RedirectResponse
+from fastapi.responses import StreamingResponse,Response
 import httpx
 import sys
 import os
@@ -131,7 +131,7 @@ async def root(request: Request):
 
 @app.get("/favicon.ico")
 async def favicon():
-    return RedirectResponse("https://api-status.alencryenfo.work/status/claudecode-pub")
+    return Response(status_code=204)
 @app.post("/select")
 async def select_provider(request: Request):
     """
