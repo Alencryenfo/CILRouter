@@ -6,7 +6,7 @@
 
 import time
 import asyncio
-from typing import Dict, Optional
+from typing import Dict
 from dataclasses import dataclass
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
