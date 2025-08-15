@@ -191,7 +191,11 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                 total = 0
                 last = b""
                 try:
+                    first = True
                     async for chunk in resp.aiter_bytes():
+                        if first:
+                            print("[sse] first-chunk", repr(chunk[:120]))
+                            first = False
                         total += len(chunk)
                         last = chunk
                         if b'"message_stop"' in chunk:
