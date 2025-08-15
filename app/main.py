@@ -205,6 +205,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         await client.aclose()
 
             handed_off = True  # 已把关闭责任交给生成器
+            print(resp.status_code, resp.headers)
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
