@@ -136,7 +136,7 @@ async def forward_request(path: str, request: Request):
         # 请求头
         headers = {
             k: v for k, v in request.headers.items()
-            if k.lower() in ALLOWED_HEADERS or k.find("anthropic") == 0 or v.lower().find("anthropic") == 0
+            if k.lower() in ALLOWED_HEADERS or k.lower().startswith("anthropic-")
         }
         headers.pop('authorization', None)
         headers.pop('Authorization', None)
