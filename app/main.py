@@ -206,10 +206,10 @@ async def forward_request(path: str, request: Request):
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
         logger.info(
-            f"IP:{IP}访问端点 /{path} 转发请求|"
+            f"IP:{IP}访问端点 /{path} 转发请求➡️"
             f"方法: {method}"
-            f"{('，参数: ' + str(query_params)) if query_params else ''}|"
-            f"请求头: {headers}|"
+            f"{('，参数: ' + str(query_params)) if query_params else ''}➡️"
+            f"请求头: {headers}➡️"
             f"请求体: {(body[:100] if body else '')}... (总长度: {len(body) if body else 0} bytes)"
         )
 
@@ -268,8 +268,8 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                     if firstres or lstres:
                         logger.info(
                             f"IP:{IP}访问端点 /{path} 转发请求响应体: "
-                            f"{firstres.decode('utf-8', errors='replace')}......"
-                            f"{lstres.decode('utf-8', errors='replace')}"
+                            f"➡️{firstres.decode('utf-8', errors='replace')}......"
+                            f"{lstres.decode('utf-8', errors='replace')}⬅️"
                         )
                     else:
                         logger.warning(f"IP:{IP}访问端点 /{path} 转发请求响应体为空")
@@ -286,7 +286,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         await client.aclose()
 
             handed_off = True  # 已把关闭责任交给生成器
-            logger.info(f"IP:{IP}访问端点 /{path} 转发请求响应头: {dict(resp.headers)}\n响应状态: {resp.status_code}")
+            logger.info(f"IP:{IP}访问端点 /{path} 转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
