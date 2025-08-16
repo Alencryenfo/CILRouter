@@ -241,7 +241,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         url = f"{base_url}/{path.lstrip('/')}"
         if query_params:
             url = f"{url}?{query_params}"
-        logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Key: {ep['api_key'][:5]}")
+        logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Key: {ep['api_key'][:5]}...")
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers["accept-encoding"] = "identity"
@@ -255,7 +255,6 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         try:
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
-
             async def byte_iter():
                 try:
                     firstres = b''
@@ -276,18 +275,24 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         )
                     else:
                         logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
-
-                except (httpx.StreamClosed, httpx.ReadError,
-                        httpx.RemoteProtocolError, anyio.EndOfStream,
-                        anyio.ClosedResourceError, asyncio.CancelledError):
-                    logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应流异常，可能是连接中断或超时")
+                except httpx.StreamClosed as e:
+                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ StreamClosed: 上游或客户端连接被关闭 ({e})")
+                except httpx.ReadError as e:
+                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ ReadError: 网络读取失败，可能是 TCP 被重置 ({e})")
+                except httpx.RemoteProtocolError as e:
+                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ RemoteProtocolError: 上游返回了无效的 HTTP 响应 ({e})")
+                except anyio.EndOfStream as e:
+                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ EndOfStream: 数据流意外结束 ({e})")
+                except anyio.ClosedResourceError as e:
+                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ ClosedResourceError: 资源已关闭仍在读写 ({e})")
+                except asyncio.CancelledError as e:
+                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ CancelledError: 协程被取消，可能是超时或客户端主动取消 ({e})")
                     return
                 finally:
                     try:
                         await resp_cm.__aexit__(None, None, None)
                     finally:
                         await client.aclose()
-
             handed_off = True  # 已把关闭责任交给生成器
             logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             return StreamingResponse(
@@ -297,10 +302,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             )
 
         except TRANSIENT_EXC as e:
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
             last_exc = e
         except Exception as e:
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
             last_exc = e
         finally:
             # 只有在“没有交付流”的情况下，才由这里关闭资源
@@ -311,9 +316,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                     pass
 
         if attempt < attempts:
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败，开始重试第 {attempt + 1} 次")
             await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
-    logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(last_exc)}")
-    raise HTTPException(status_code=502, detail=f"上游连接失败：{last_exc}")
+    logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(last_exc).__name__}: {last_exc}")
+    raise HTTPException(status_code=502, detail=f"上游连接失败：{type(last_exc).__name__}: {last_exc}")
 
 if __name__ == "__main__":
     import uvicorn
