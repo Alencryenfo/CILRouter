@@ -289,18 +289,18 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                             f"➡️{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}⬅️"
                         )
                     else:
-                        logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
+                        logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
                 except (httpx.StreamClosed,
-                        httpx.ReadError,
-                        httpx.RemoteProtocolError,
-                        anyio.EndOfStream,
-                        anyio.ClosedResourceError,
-                        anyio.BrokenResourceError,
-                        asyncio.CancelledError,
-                        ConnectionResetError,
-                        BrokenPipeError) as e:
-                    logger.warning(f"❌IP:{IP} /{path}➡️流式中断: {type(e).__name__}: {e}")
-                    return
+                                httpx.ReadError,
+                                httpx.RemoteProtocolError,
+                                anyio.EndOfStream,
+                                anyio.ClosedResourceError,
+                                anyio.BrokenResourceError,
+                                asyncio.CancelledError,
+                                ConnectionResetError,
+                                BrokenPipeError) as e:
+                        logger.warning(f"IP:{IP}访问端点 /{path}➡️发生错误，流式中断: {type(e).__name__}: {e}")
+                        return
                 finally:
                     # ★ 只在生成器结束时关闭上游响应上下文
                     try:
