@@ -7,16 +7,14 @@ CIL Router - 极简版 Claude API 转发器
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
 import httpx
-import sys
-import os
 from contextlib import asynccontextmanager
+import anyio
+import asyncio
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
 from app.log import setup_logger
-import anyio
-import asyncio
+from app.http_client.http_pool import get_client_for, close_all_clients
 
 logger = setup_logger(
     log_level=config.get_log_level(),
@@ -75,6 +73,7 @@ async def lifespan(_: FastAPI):
     finally:
         if rl:
             await rl.close()
+        await close_all_clients()
 
 
 app = FastAPI(title="CILRouter", description="Claude Code透明代理", version="1.0.2",
@@ -255,16 +254,15 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers["accept-encoding"] = "identity"
 
-        timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
-        limits = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
-        transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
-        client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
-
-        handed_off = False  # 关键：标记是否已把关闭责任交给生成器
+        # timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+        # limits = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
+        # transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
+        # client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
+        client = await get_client_for(base_url) # 连接池获取客户端
         try:
+            entered = True
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
-
             async def byte_iter():
                 try:
                     firstres = b''
@@ -300,12 +298,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         f"❌IP:{IP} 端点 /{path} ➡️ CancelledError: 协程被取消，可能是超时或客户端主动取消 ({e})")
                     return
                 finally:
-                    try:
-                        await resp_cm.__aexit__(None, None, None)
-                    finally:
-                        await client.aclose()
-
-            handed_off = True  # 已把关闭责任交给生成器
+                    await resp_cm.__aexit__(None, None, None)
             logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             return StreamingResponse(
                 byte_iter(),
@@ -314,18 +307,21 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             )
 
         except TRANSIENT_EXC as e:
+            if entered:
+                try:
+                    await resp_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
             last_exc = e
         except Exception as e:
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-            last_exc = e
-        finally:
-            # 只有在“没有交付流”的情况下，才由这里关闭资源
-            if not handed_off:
+            if entered:
                 try:
-                    await client.aclose()
+                    await resp_cm.__aexit__(None, None, None)
                 except Exception:
                     pass
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
+            last_exc = e
 
         if attempt < attempts:
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败，开始重试第 {attempt + 1} 次")
