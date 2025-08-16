@@ -8,9 +8,11 @@ import time
 import asyncio
 from typing import Dict
 from dataclasses import dataclass
-from fastapi import Request, HTTPException
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 import ipaddress
+from starlette.responses import JSONResponse
+
 from app.log import setup_logger
 from app.config import config
 
@@ -190,6 +192,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # 检查是否允许请求
         if not await self.rate_limiter.check(client_ip):
             logger.warning(f"❌限流检查➡️IP:{client_ip}➡️触发限流➡️返回429错误")
-            raise HTTPException(status_code=429, detail="Too Many Requests")
+            return JSONResponse({"detail": "触发限流⚠️频繁请求将会被封锁"}, status_code=429)
 
         return await call_next(request)
