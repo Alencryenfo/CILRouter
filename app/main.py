@@ -171,8 +171,8 @@ async def select_provider(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"IP:{IP}访问端点 /select➡️发生错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
+        logger.error(f"IP:{IP}访问端点 /select➡️发生错误: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
@@ -225,12 +225,12 @@ async def forward_request(path: str, request: Request):
         return await _proxy_request(method, path, query_params, headers, body, IP)
 
     except httpx.HTTPError as e:
-        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
-        raise HTTPException(status_code=502, detail=f"转发请求失败: {str(e)}")
+        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail=f"转发请求失败: {type(e).__name__}: {e}")
 
     except Exception as e:
-        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
+        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
 
 
 def _strip_hop_headers(h: dict) -> dict:
@@ -260,9 +260,10 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         # client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
         client = await get_client_for(base_url) # 连接池获取客户端
         try:
-            entered = True
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
+            entered = True
+            logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             async def byte_iter():
                 try:
                     firstres = b''
@@ -283,23 +284,19 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         )
                     else:
                         logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
-                except httpx.StreamClosed as e:
-                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ StreamClosed: 上游或客户端连接被关闭 ({e})")
-                except httpx.ReadError as e:
-                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ ReadError: 网络读取失败，可能是 TCP 被重置 ({e})")
-                except httpx.RemoteProtocolError as e:
-                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ RemoteProtocolError: 上游返回了无效的 HTTP 响应 ({e})")
-                except anyio.EndOfStream as e:
-                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ EndOfStream: 数据流意外结束 ({e})")
-                except anyio.ClosedResourceError as e:
-                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ ClosedResourceError: 资源已关闭仍在读写 ({e})")
-                except asyncio.CancelledError as e:
-                    logger.warning(
-                        f"❌IP:{IP} 端点 /{path} ➡️ CancelledError: 协程被取消，可能是超时或客户端主动取消 ({e})")
-                    return
+                except (httpx.StreamClosed,
+                                httpx.ReadError,
+                                httpx.RemoteProtocolError,
+                                anyio.EndOfStream,
+                                anyio.ClosedResourceError,
+                                anyio.BrokenResourceError,
+                                asyncio.CancelledError,
+                                ConnectionResetError,
+                                BrokenPipeError) as e:
+                        logger.warning(f"❌IP:{IP}访问端点 /{path}➡️发生错误，流式中断: {type(e).__name__}: {e}")
+                        return
                 finally:
                     await resp_cm.__aexit__(None, None, None)
-            logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
