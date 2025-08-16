@@ -5,11 +5,12 @@ CIL Router - 极简版 Claude API 转发器
 """
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse,Response
+from fastapi.responses import StreamingResponse, Response
 import httpx
 import sys
 import os
 from contextlib import asynccontextmanager
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
@@ -24,34 +25,34 @@ logger = setup_logger(
 provider_lock = asyncio.Lock()
 PROHIBIT_HEADERS = {
     # 逐跳 / 连接管理
-    "authorization","Authorization",
-    "host","Host",
-    "connection","Connection",
-    "keep-alive","Keep-Alive",
-    "proxy-connection","Proxy-Connection",
-    "transfer-encoding","Transfer-Encoding",
-    "te","TE",
-    "trailer","Trailer",
-    "upgrade","Upgrade",
+    "authorization", "Authorization",
+    "host", "Host",
+    "connection", "Connection",
+    "keep-alive", "Keep-Alive",
+    "proxy-connection", "Proxy-Connection",
+    "transfer-encoding", "Transfer-Encoding",
+    "te", "TE",
+    "trailer", "Trailer",
+    "upgrade", "Upgrade",
 
     # 长度 / 期望（交给 httpx 自己计算）
-    "content-length","Content-Length",
-    "expect","Expect",
+    "content-length", "Content-Length",
+    "expect", "Expect",
 
     # CDN / 代理痕迹（固定名）
-    "cdn-loop","CDN-Loop",
-    "x-forwarded-for","X-Forwarded-For",
-    "x-forwarded-proto","X-Forwarded-Proto",
-    "x-forwarded-host","X-Forwarded-Host",
-    "x-forwarded-server","X-Forwarded-Server",
-    "x-forwarded-port","X-Forwarded-Port",
-    "x-real-ip","X-Real-IP",
-    "true-client-ip","True-Client-IP",
-    "via","Via",
-    "forwarded","Forwarded",
-    }
-HOP_HEADERS = ("transfer-encoding","content-length","connection","keep-alive",
-               "proxy-connection","upgrade","te","trailer", "content-encoding")
+    "cdn-loop", "CDN-Loop",
+    "x-forwarded-for", "X-Forwarded-For",
+    "x-forwarded-proto", "X-Forwarded-Proto",
+    "x-forwarded-host", "X-Forwarded-Host",
+    "x-forwarded-server", "X-Forwarded-Server",
+    "x-forwarded-port", "X-Forwarded-Port",
+    "x-real-ip", "X-Real-IP",
+    "true-client-ip", "True-Client-IP",
+    "via", "Via",
+    "forwarded", "Forwarded",
+}
+HOP_HEADERS = ("transfer-encoding", "content-length", "connection", "keep-alive",
+               "proxy-connection", "upgrade", "te", "trailer", "content-encoding")
 TRANSIENT_EXC = (
     httpx.ConnectError, httpx.ConnectTimeout,
     httpx.ReadTimeout, httpx.ReadError,
@@ -64,6 +65,7 @@ rl = RateLimiter(
     burst_size=rate_limit_config["RATE_LIMIT_BURST_SIZE"]
 ) if RATE_LIMIT_ENABLED else None
 
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
@@ -74,15 +76,17 @@ async def lifespan(_: FastAPI):
         if rl:
             await rl.close()
 
+
 app = FastAPI(title="CILRouter", description="Claude Code透明代理", version="1.0.2",
               docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
 app.add_middleware(
     RateLimitMiddleware,
-    rate_limiter=rl,                            # 可能为 None；中间件内部需判断 enabled
+    rate_limiter=rl,  # 可能为 None；中间件内部需判断 enabled
     enabled=RATE_LIMIT_ENABLED,
     trust_proxy=rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
 )
+
 
 def get_request_ip(request: Request) -> str:
     """获取客户端IP地址，复用中间件逻辑"""
@@ -118,6 +122,7 @@ def get_request_ip(request: Request) -> str:
     logger.warning("❌无法获取客户端IP，需要检查可能的攻击")
     return "unknown-client"
 
+
 @app.get("/")
 async def root(request: Request):
     """根路径，返回当前状态"""
@@ -131,9 +136,12 @@ async def root(request: Request):
         "全部供应商信息": config.get_all_providers_info(),
     }
 
+
 @app.get("/favicon.ico")
 async def favicon():
     return Response(status_code=204)
+
+
 @app.post("/select")
 async def select_provider(request: Request):
     """
@@ -205,7 +213,6 @@ async def forward_request(path: str, request: Request):
             if kl.startswith(("cf-", "cf-access-")):
                 headers.pop(k, None)
 
-
         body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
 
         logger.info(
@@ -216,7 +223,7 @@ async def forward_request(path: str, request: Request):
             f"请求体: {(body[:200] if body else '')}... (总长度: {len(body) if body else 0} bytes)"
         )
 
-        return await _proxy_request(method, path, query_params, headers, body,IP)
+        return await _proxy_request(method, path, query_params, headers, body, IP)
 
     except httpx.HTTPError as e:
         logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
@@ -226,10 +233,12 @@ async def forward_request(path: str, request: Request):
         logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"内部错误: {str(e)}")
 
+
 def _strip_hop_headers(h: dict) -> dict:
     return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
 
-async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes,IP:str):
+
+async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes, IP: str):
     last_exc = None
     attempts = 3
 
@@ -246,22 +255,23 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
         up_headers["accept-encoding"] = "identity"
 
-        timeout   = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
-        limits    = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
+        timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+        limits = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
         transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
-        client    = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
+        client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
 
         handed_off = False  # 关键：标记是否已把关闭责任交给生成器
         try:
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
+
             async def byte_iter():
                 try:
                     firstres = b''
                     lstres = b''
                     async for chunk in resp.aiter_bytes():
                         firstres += chunk
-                        if len(firstres)>200:
+                        if len(firstres) > 200:
                             firstres = firstres[:200]
                         lstres += chunk
                         if len(lstres) > 200:
@@ -286,13 +296,15 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                 except anyio.ClosedResourceError as e:
                     logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ ClosedResourceError: 资源已关闭仍在读写 ({e})")
                 except asyncio.CancelledError as e:
-                    logger.warning(f"❌IP:{IP} 端点 /{path} ➡️ CancelledError: 协程被取消，可能是超时或客户端主动取消 ({e})")
+                    logger.warning(
+                        f"❌IP:{IP} 端点 /{path} ➡️ CancelledError: 协程被取消，可能是超时或客户端主动取消 ({e})")
                     return
                 finally:
                     try:
                         await resp_cm.__aexit__(None, None, None)
                     finally:
                         await client.aclose()
+
             handed_off = True  # 已把关闭责任交给生成器
             logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
             return StreamingResponse(
@@ -321,15 +333,19 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
     logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(last_exc).__name__}: {last_exc}")
     raise HTTPException(status_code=502, detail=f"上游连接失败：{type(last_exc).__name__}: {last_exc}")
 
+
 if __name__ == "__main__":
     import uvicorn
+
     server_config = config.get_server_config()
     import logging
+
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).disabled = True
     # 启动前日志
     logger.info(f"✅ 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     logger.info(f"✅ 配置了 {len(config.get_all_providers_info())} 个供应商")
     logger.info(f"✅ 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
-    
-    uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'],http="h11", timeout_keep_alive=120,access_log=False)
+
+    uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'], http="h11", timeout_keep_alive=120,
+                access_log=False)
