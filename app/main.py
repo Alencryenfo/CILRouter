@@ -48,6 +48,9 @@ PROHIBIT_HEADERS = {
     "true-client-ip", "True-Client-IP",
     "via", "Via",
     "forwarded", "Forwarded",
+
+    # x-api-key 相关（交给 httpx 自己处理）
+    "x-api-key", "X-Api-Key",
 }
 HOP_HEADERS = ("transfer-encoding", "content-length", "connection", "keep-alive",
                "proxy-connection", "upgrade", "te", "trailer", "content-encoding")
