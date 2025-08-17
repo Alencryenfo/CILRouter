@@ -6,6 +6,7 @@ CIL Router 日志配置模块
 
 import logging
 import sys
+import re
 
 def setup_logger(
     log_level: str,
@@ -41,14 +42,25 @@ def setup_logger(
 
 _default_logger = None
 
-
 def get_logger() -> logging.Logger:
-    """获取默认日志器"""
+    """
+    获取默认日志器，如果未设置则使用默认配置
+
+    Returns:
+        日志器实例
+    """
     global _default_logger
     if _default_logger is None:
-        _default_logger = setup_logger()
+        _default_logger = setup_logger("INFO")
     return _default_logger
 
+def oneline(b: bytes) -> str:
+    s = b.decode("utf-8", errors="replace")
+    # 1) 把换行符/回车转为可见的 \n \r
+    s = s.replace("\r", r"\r").replace("\n", r"\n")
+    # 2) 可选：再把其它不可见空白压扁（保留空格）
+    s = re.sub(r"[ \t\f\v]+", " ", s)
+    return s
 
 # 便捷的日志函数
 def debug(msg, *args, **kwargs):

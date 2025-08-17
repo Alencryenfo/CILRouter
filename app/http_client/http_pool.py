@@ -36,9 +36,9 @@ async def get_client_for(base_url: str) -> httpx.AsyncClient:
             pool=1.0,      # 连接池获取超时：避免无限等待
         )
         limits = httpx.Limits(
-            max_connections=512,          # 池内最大并发连接数（所有host总和）
-            max_keepalive_connections=512,# 可复用的长连数量
-            keepalive_expiry=90.0,        # 空闲长连保活时长
+            max_connections=60,          # 池内最大并发连接数（所有host总和）
+            max_keepalive_connections=60,# 可复用的长连数量
+            keepalive_expiry=30.0,        # 空闲长连保活时长
         )
         transport = httpx.AsyncHTTPTransport(
             http2=True,   # 若上游支持，开启HTTP/2可显著提升并发复用
