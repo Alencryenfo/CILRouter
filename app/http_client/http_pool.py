@@ -31,9 +31,9 @@ async def get_client_for(base_url: str) -> httpx.AsyncClient:
         # —— 最简但稳妥的默认参数（可按需微调）——
         timeout = httpx.Timeout(
             connect=5.0,   # 连接超时：短一些便于快速失败+重试
-            read=45.0,     # 读取超时：适配大多数流式/长响应
-            write=8.0,     # 写入超时
-            pool=1.0,      # 连接池获取超时：避免无限等待
+            read=None,     # 读取超时：适配大多数流式/长响应
+            write=20.0,     # 写入超时
+            pool=5.0,      # 连接池获取超时：避免无限等待
         )
         limits = httpx.Limits(
             max_connections=60,          # 池内最大并发连接数（所有host总和）

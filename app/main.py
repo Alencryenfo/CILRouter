@@ -10,7 +10,6 @@ import httpx
 from contextlib import asynccontextmanager
 import anyio
 import asyncio
-from typing import AsyncIterator
 
 from typing import AsyncIterator
 from app.config import config
@@ -54,7 +53,7 @@ PROHIBIT_HEADERS = {
     # x-api-key 相关（交给 httpx 自己处理）
     "x-api-key", "X-Api-Key",
 }
-HOP_HEADERS = ("transfer-encoding", "content-length", "connection", "keep-alive",
+HOP_HEADERS = ("transfer-encoding",  "connection", "keep-alive",
                "proxy-connection", "upgrade", "te", "trailer", "content-encoding")
 TRANSIENT_EXC = (
     httpx.ConnectError, httpx.ConnectTimeout,
@@ -310,6 +309,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                 except (httpx.StreamClosed,
                                 httpx.ReadError,
                                 httpx.RemoteProtocolError,
+                                httpx.ReadTimeout,  # ★ 新增
                                 anyio.EndOfStream,
                                 anyio.ClosedResourceError,
                                 anyio.BrokenResourceError,
