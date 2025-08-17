@@ -262,44 +262,53 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         # transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
         # client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
         client = await get_client_for(base_url) # 连接池获取客户端
+        resp_cm = None
+        resp = None
+        entered = False
+        returned = False
+
         try:
             resp_cm = client.stream(method, url, headers=up_headers, content=body)
             resp = await resp_cm.__aenter__()
             entered = True
+
             logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
+
             async def byte_iter():
                 try:
                     firstres = b''
                     lstres = b''
                     async for chunk in resp.aiter_bytes():
-                        firstres += chunk
-                        if len(firstres) > 200:
-                            firstres = firstres[:200]
-                        lstres += chunk
-                        if len(lstres) > 200:
-                            lstres = lstres[-200:]
+                        if not firstres and chunk:
+                            firstres = chunk[:200]  # 仅首块采样
+                        lstres = (lstres + chunk)[-200:]  # 尾部滚动窗口
                         yield chunk
                     if firstres or lstres:
                         logger.info(
                             f"IP:{IP}访问端点 /{path}➡️转发请求响应体: "
-                            f"➡️{firstres.decode('utf-8', errors='replace')}......"
-                            f"{lstres.decode('utf-8', errors='replace')}⬅️"
+                            f"➡️{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}⬅️"
                         )
                     else:
                         logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
                 except (httpx.StreamClosed,
-                                httpx.ReadError,
-                                httpx.RemoteProtocolError,
-                                anyio.EndOfStream,
-                                anyio.ClosedResourceError,
-                                anyio.BrokenResourceError,
-                                asyncio.CancelledError,
-                                ConnectionResetError,
-                                BrokenPipeError) as e:
-                        logger.warning(f"❌IP:{IP}访问端点 /{path}➡️发生错误，流式中断: {type(e).__name__}: {e}")
-                        return
+                        httpx.ReadError,
+                        httpx.RemoteProtocolError,
+                        anyio.EndOfStream,
+                        anyio.ClosedResourceError,
+                        anyio.BrokenResourceError,
+                        asyncio.CancelledError,
+                        ConnectionResetError,
+                        BrokenPipeError) as e:
+                    logger.warning(f"❌IP:{IP} /{path}➡️流式中断: {type(e).__name__}: {e}")
+                    return
                 finally:
-                    await resp_cm.__aexit__(None, None, None)
+                    # ★ 只在生成器结束时关闭上游响应上下文
+                    try:
+                        await resp_cm.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+
+            returned = True
             return StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
@@ -307,15 +316,8 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             )
 
         except TRANSIENT_EXC as e:
-            if entered:
-                try:
-                    await resp_cm.__aexit__(None, None, None)
-                except Exception:
-                    pass
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-            last_exc = e
-        except Exception as e:
-            if entered:
+            # 抛错且尚未返回 -> 兜底关闭
+            if entered and resp_cm is not None and not returned:
                 try:
                     await resp_cm.__aexit__(None, None, None)
                 except Exception:
@@ -323,6 +325,14 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
             last_exc = e
 
+        except Exception as e:
+            if entered and resp_cm is not None and not returned:
+                try:
+                    await resp_cm.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
+            last_exc = e
         if attempt < attempts:
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败，开始重试第 {attempt + 1} 次")
             await asyncio.sleep(0.8 * (2 ** (attempt - 1)))

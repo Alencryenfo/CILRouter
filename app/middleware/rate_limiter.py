@@ -79,7 +79,7 @@ class RateLimiter:
         """创建新的令牌桶"""
         return TokenBucket(
             tokens=float(self.burst_size),
-            capacity=float(self.rpm),
+            capacity=float(self.burst_size),
             refill_rate=self.refill_rate,
             last_refill=time.time()
         )
