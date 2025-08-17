@@ -193,4 +193,4 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.warning(f"❌限流检查➡️IP:{client_ip}➡️触发限流➡️返回429错误")
             return JSONResponse({"detail": "触发限流⚠️频繁请求将会被封锁"}, status_code=429)
 
-        return await call_next(request)
+        return await call_next(request) 
