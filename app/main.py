@@ -10,6 +10,7 @@ import httpx
 from contextlib import asynccontextmanager
 import anyio
 import asyncio
+from typing import AsyncIterator
 
 from app.config import config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
@@ -215,17 +216,32 @@ async def forward_request(path: str, request: Request):
             if kl.startswith(("cf-", "cf-access-")):
                 headers.pop(k, None)
 
-        body = await request.body() if method in ["POST", "PUT", "PATCH"] else b""
-
         logger.info(
             f"IP:{IP}访问端点 /{path}➡️转发请求➡️"
             f"方法: {method}"
             f"{('，参数: ' + str(query_params)) if query_params else ''}➡️"
             f"请求头: {headers}➡️"
-            f"请求体: {(body[:200] if body else '')}... (总长度: {len(body) if body else 0} bytes)"
         )
 
-        return await _proxy_request(method, path, query_params, headers, body, IP)
+        async def body_iter():
+            """记录首段请求体并流式转发"""
+            first = b""
+            total = 0
+            async for chunk in request.stream():
+                if len(first) < 200:
+                    need = 200 - len(first)
+                    first += chunk[:need]
+                total += len(chunk)
+                yield chunk
+            if total:
+                logger.info(
+                    f"IP:{IP}访问端点 /{path}➡️请求体: "
+                    f"{first.decode('utf-8', 'replace')}... (总长度: {total} bytes)"
+                )
+            else:
+                logger.info(f"IP:{IP}访问端点 /{path}➡️请求体为空")
+
+        return await _proxy_request(method, path, query_params, headers, body_iter(), IP)
 
     except httpx.HTTPError as e:
         logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
@@ -240,7 +256,7 @@ def _strip_hop_headers(h: dict) -> dict:
     return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
 
 
-async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body: bytes, IP: str):
+async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body_iter: AsyncIterator[bytes], IP: str):
     last_exc = None
     attempts = 3
 
@@ -268,7 +284,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         returned = False
 
         try:
-            resp_cm = client.stream(method, url, headers=up_headers, content=body)
+            resp_cm = client.stream(method, url, headers=up_headers, content=body_iter)
             resp = await resp_cm.__aenter__()
             entered = True
 
