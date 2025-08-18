@@ -41,7 +41,7 @@ def axiom_log(level: str, **fields) -> None:
     try:
         with httpx.Client() as client:
             # 发送 JSON 数组（多数接收端更通用；需要 NDJSON 的话可自行调整）
-            r = client.post("http://127.0.0.1/logs", json=[event])
+            r = client.post("http://cloudbase-vectorhk-aovphq:4864/logs", json=[event])
             r.raise_for_status()
     except httpx.RequestError as e:
         print(f"Axiom上报出现错误: {e}")
