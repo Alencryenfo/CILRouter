@@ -253,7 +253,7 @@ async def forward_request(path: str, request: Request):
                 total += len(chunk)
                 yield chunk
             if total:
-                axiom_log("INFO", IP=IP, trace_id=trace_id, 请求体={first.decode('utf-8', 'replace')}, 请求体长度=total)
+                axiom_log("INFO", IP=IP, trace_id=trace_id, 请求体={first.decode('utf-8', 'replace')},总长度=total)
                 logger.info(
                     f"IP:{IP}访问端点 /{path}➡️请求体: "
                     f"{first.decode('utf-8', 'replace')}... (总长度: {total} bytes)"
@@ -311,20 +311,23 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             resp_cm = client.stream(method, url, headers=up_headers, content=body_iter)
             resp = await resp_cm.__aenter__()
             entered = True
-            axiom_log("INFO", IP=IP, trace_id=trace_id, 响应头={dict(resp.headers)}, 响应状态=resp.status_code)
+            axiom_log("INFO", IP=IP, trace_id=trace_id, 响应头= dict(resp.headers),响应状态= resp.status_code)
             logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
 
             async def byte_iter():
                 try:
                     firstres = b''
                     lstres = b''
+                    length = 0
                     async for chunk in resp.aiter_bytes():
                         if not firstres and chunk:
                             firstres = chunk[:200]  # 仅首块采样
                         lstres = (lstres + chunk)[-200:]  # 尾部滚动窗口
+                        length += len(chunk)
                         yield chunk
                     if firstres or lstres:
-                        axiom_log("INFO", IP=IP, trace_id=trace_id, 响应体=str({firstres.decode('utf-8', 'replace')})+"......"+str(lstres.decode('utf-8', 'replace')))
+                        axiom_log("INFO", IP=IP, trace_id=trace_id, 响应体=f"{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}"
+                                  ,总长度=length)
                         logger.info(
                             f"IP:{IP}访问端点 /{path}➡️转发请求响应体: "
                             f"➡️{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}⬅️"
