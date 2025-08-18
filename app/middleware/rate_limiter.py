@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import ipaddress
 from starlette.responses import JSONResponse
 
-from app.log import setup_logger
+from app.log import setup_logger,get_trace_id,axiom_log
 from app.config import config
 
 logger = setup_logger(log_level=config.get_log_level())
@@ -56,6 +56,7 @@ class RateLimiter:
 
     async def _cleanup_task(self):
         """后台每隔 cleanup_interval 秒清理过期桶"""
+        axiom_log("INFO", 信息="限流清理任务已经启动")
         logger.info("✅ ♻️限流清理任务已启动")
         try:
             while True:
@@ -67,11 +68,14 @@ class RateLimiter:
                         if now - b.last_refill > 120  # 120秒未使用的桶将被清理
                     ]
                     if keys_to_delete:
+                        axiom_log("INFO", 信息=f"清理过期令牌桶, 数量: {len(keys_to_delete)}, IP列表: {keys_to_delete}")
                         logger.info(f"♻️限流清理任务➡️清理过期桶➡️数量:{len(keys_to_delete)}➡️IP列表:{keys_to_delete}")
                     for k in keys_to_delete:
                         del self.buckets[k]
+                    axiom_log("INFO", 信息=f"清理完成，当前活跃桶数:{len(self.buckets)}")
                     logger.info(f"♻️限流清理任务➡️当前活跃桶数:{len(self.buckets)}")
         except asyncio.CancelledError:
+            axiom_log("INFO", 信息="限流清理任务已停止")
             logger.info("✅ ♻️限流清理任务已停止")
             return
 
@@ -110,15 +114,18 @@ class RateLimiter:
             if key not in self.buckets:
                 self.buckets[key] = self._create_bucket()
                 if not key == "127.0.0.1":
+                    axiom_log("INFO", IP=key, 信息=f"创建新的令牌桶, 容量: {self.rpm}, 突发: {self.burst_size}")
                     logger.info(f"🆕IP:{key}➡️创建新令牌桶➡️容量:{self.rpm}➡️突发:{self.burst_size}")
             bucket = self.buckets[key]
             self._update_tokens(bucket)
             if bucket.tokens >= 1.0:
                 bucket.tokens -= 1.0
                 if not key == "127.0.0.1":
+                    axiom_log("INFO", IP=key, 信息=f"限流检查通过, 令牌: {bucket.tokens:.1f}/{bucket.capacity}, 速率: {bucket.refill_rate:.2f}/秒")
                     logger.info(f"🔋限流检查➡️IP:{key}➡️结果:允许➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}")
                 return True
             else:
+                axiom_log("WARNING", IP=key, 信息=f"限流检查拒绝, 令牌: {bucket.tokens:.1f}/{bucket.capacity}, 速率: {bucket.refill_rate:.2f}/秒")
                 logger.warning(f"🪫限流检查➡️IP:{key}➡️结果:拒绝➡️令牌:{bucket.tokens:.1f}/{bucket.capacity}➡️速率:{bucket.refill_rate:.2f}/秒")
                 return False
 
@@ -183,14 +190,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         """中间件处理逻辑"""
+        trace_id = get_trace_id()
+        request.state.trace_id = trace_id
         # 如果限流未启用，直接通过
         if not self.enabled:
             return await call_next(request)
         # 获取客户端IP
         client_ip = self._get_client_ip(request)
+        request.state.ip = client_ip
         # 检查是否允许请求
         if not await self.rate_limiter.check(client_ip):
-            logger.warning(f"❌限流检查➡️IP:{client_ip}➡️触发限流➡️返回429错误")
-            return JSONResponse({"detail": "触发限流⚠️频繁请求将会被封锁"}, status_code=429)
+            axiom_log("WARNING", IP=client_ip,信息="触发限流", trace_id=trace_id)
+            logger.warning(f"❌限流检查➡️IP:{client_ip},➡️触发限流➡️返回429错误")
+            return JSONResponse({"detail": "触发限流⚠️频繁请求将会被封锁","跟踪ID":trace_id}, status_code=429)
 
         return await call_next(request) 

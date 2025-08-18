@@ -14,7 +14,7 @@ import asyncio
 from typing import AsyncIterator
 from app.config import config
 from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
-from app.log import setup_logger
+from app.log import setup_logger,axiom_log
 from app.http_client.http_pool import get_client_for, close_all_clients
 
 logger = setup_logger(
@@ -91,52 +91,56 @@ app.add_middleware(
 )
 
 
-def get_request_ip(request: Request) -> str:
-    """获取客户端IP地址，复用中间件逻辑"""
-    trust_proxy = rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
-    # 如果不信任代理，直接使用连接IP
-    if not trust_proxy:
-        if request.client and hasattr(request.client, 'host') and request.client.host:
-            return request.client.host
-        return "unknown-client"
-    # 信任代理的情况下，按优先级获取真实IP
-    # 1. CF-Connecting-IP: Cloudflare 提供的原始客户端IP（最可靠）
-    cf_connecting_ip = request.headers.get("CF-Connecting-IP")
-    if cf_connecting_ip:
-        return cf_connecting_ip.strip()
-    # 2. CF-IPCountry 存在时，说明经过了 Cloudflare，但没有 CF-Connecting-IP
-    if request.headers.get("CF-IPCountry"):
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            first_ip = forwarded_for.split(",")[0].strip()
-            return first_ip
-    # 3. X-Real-IP: nginx 等反向代理设置的真实IP
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-    # 4. X-Forwarded-For: 标准代理头部（取第一个IP）
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        first_ip = forwarded_for.split(",")[0].strip()
-        return first_ip
-    # 5. 最后使用连接IP
-    if request.client and hasattr(request.client, 'host') and request.client.host:
-        return request.client.host
-    logger.warning("❌无法获取客户端IP，需要检查可能的攻击")
-    return "unknown-client"
+# def get_request_ip(request: Request) -> str:
+#     """获取客户端IP地址，复用中间件逻辑"""
+#     trust_proxy = rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
+#     # 如果不信任代理，直接使用连接IP
+#     if not trust_proxy:
+#         if request.client and hasattr(request.client, 'host') and request.client.host:
+#             return request.client.host
+#         return "unknown-client"
+#     # 信任代理的情况下，按优先级获取真实IP
+#     # 1. CF-Connecting-IP: Cloudflare 提供的原始客户端IP（最可靠）
+#     cf_connecting_ip = request.headers.get("CF-Connecting-IP")
+#     if cf_connecting_ip:
+#         return cf_connecting_ip.strip()
+#     # 2. CF-IPCountry 存在时，说明经过了 Cloudflare，但没有 CF-Connecting-IP
+#     if request.headers.get("CF-IPCountry"):
+#         forwarded_for = request.headers.get("X-Forwarded-For")
+#         if forwarded_for:
+#             first_ip = forwarded_for.split(",")[0].strip()
+#             return first_ip
+#     # 3. X-Real-IP: nginx 等反向代理设置的真实IP
+#     real_ip = request.headers.get("X-Real-IP")
+#     if real_ip:
+#         return real_ip.strip()
+#     # 4. X-Forwarded-For: 标准代理头部（取第一个IP）
+#     forwarded_for = request.headers.get("X-Forwarded-For")
+#     if forwarded_for:
+#         first_ip = forwarded_for.split(",")[0].strip()
+#         return first_ip
+#     # 5. 最后使用连接IP
+#     if request.client and hasattr(request.client, 'host') and request.client.host:
+#         return request.client.host
+#     axiom_log("WARNING",信息=f"无法获取客户端IP，需要检查可能的攻击")
+#     logger.warning("❌无法获取客户端IP，需要检查可能的攻击")
+#     return "unknown-client"
 
 
 @app.get("/")
 async def root(request: Request):
     """根路径，返回当前状态"""
-    IP = get_request_ip(request)
+    IP = request.state.ip
+    trace_id = request.state.trace_id
     if not IP == "127.0.0.1":
-        logger.info(f"IP:{get_request_ip(request)}访问端点 /")
+        axiom_log("INFO",IP=IP,trace_id=trace_id, 信息="访问端点 /")
+        logger.info(f"IP:{IP}访问端点 /")
     return {
         "应用名称": "CIL Router",
         "当前版本": "1.0.2",
         "当前供应商": config.CURRENT_PROVIDER_INDEX,
         "全部供应商信息": config.get_all_providers_info(),
+        "跟踪ID": trace_id
     }
 
 
@@ -151,32 +155,39 @@ async def select_provider(request: Request):
     选择供应商接口
     POST 一个数字表示要使用的供应商索引
     """
-    IP = get_request_ip(request)
+    IP = request.state.ip
+    trace_id = request.state.trace_id
     try:
+        axiom_log("INFO",IP=IP,trace_id=trace_id, 信息="访问端点 /select")
         logger.info(f"IP:{IP}访问端点 /select")
         body = await request.body()
         index = int(body.decode().strip())
         if config.set_provider_index(index):
+            axiom_log("INFO", IP=IP,trace_id=trace_id, 信息=F"访问端点 /select 成功，切换到供应商 {index}")
             logger.info(f"IP:{IP}访问端点 /select➡️成功，切换到供应商 {index}")
             return {
-                "success": True,
-                "message": f"已切换到供应商 {index}",
-                "供应商信息": config.get_provider_info(index)
+                "状态": "成功",
+                "信息": f"已切换到供应商 {index}",
+                "供应商信息": config.get_provider_info(index),
+                "跟踪ID": trace_id
             }
         else:
+            axiom_log("WARNING", IP=IP,trace_id=trace_id, 信息=f"访问端点 /select 失败，索引 {index} 无效")
             logger.warning(f"❌IP:{IP}访问端点 /select➡️失败，索引 {index} 无效")
             raise HTTPException(
                 status_code=400,
-                detail=f"无效的供应商索引 {index}"
+                detail={"信息":f"无效的供应商索引 {index}","跟踪ID": trace_id}
             )
     except ValueError:
+        axiom_log("ERROR", IP=IP,trace_id=trace_id, 信息="访问端点 /select 发生错误: 请求体不是一个数字")
         logger.error(f"IP:{IP}访问端点 /select➡️发生错误: 请求体不是一个数字")
-        raise HTTPException(status_code=400, detail="请求体不是一个数字")
+        raise HTTPException(status_code=400, detail={"信息":"请求体不是一个数字","跟踪ID": trace_id})
     except HTTPException:
         raise
     except Exception as e:
+        axiom_log("ERROR", IP=IP, trace_id=trace_id, 信息=f"访问端点 /select 发生错误: {type(e).__name__}: {e}")
         logger.error(f"IP:{IP}访问端点 /select➡️发生错误: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail={"信息":f"内部错误: {type(e).__name__}: {e}","跟踪ID": trace_id})
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
@@ -187,7 +198,9 @@ async def forward_request(path: str, request: Request):
     智能处理API Key：如果请求中有Authorization头部则替换，没有则添加
     支持流式响应
     """
-    IP = get_request_ip(request)
+    IP = request.state.ip
+    trace_id = request.state.trace_id
+    axiom_log("INFO", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path}")
     logger.info(f"IP:{IP}访问端点 /{path}")
     try:
         # 鉴权检查
@@ -195,11 +208,13 @@ async def forward_request(path: str, request: Request):
         if auth_key:
             auth_header = (request.headers.get('authorization', '')).strip()
             if not auth_header.lower().startswith('bearer '):
+                axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 鉴权失败: 缺少Bearer令牌")
                 logger.warning(f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 缺少Bearer令牌")
-                raise HTTPException(status_code=401, detail="缺少鉴权令牌")
+                raise HTTPException(status_code=401, detail={"信息":"缺少鉴权令牌","跟踪ID": trace_id})
             if auth_header[7:] != auth_key:
+                axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 鉴权失败: 令牌无效")
                 logger.warning(f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 令牌无效")
-                raise HTTPException(status_code=401, detail="令牌无效")
+                raise HTTPException(status_code=401, detail={"信息":"令牌无效","跟踪ID": trace_id})
 
         # 请求方法
         method = request.method.upper()
@@ -207,15 +222,19 @@ async def forward_request(path: str, request: Request):
         # 目标URL
         query_params = str(request.url.query)
 
+
         # 请求头处理
         headers = dict(request.headers)
+
         for k in PROHIBIT_HEADERS:
             headers.pop(k, None)
         for k in list(headers.keys()):
             kl = k.lower()
             if kl.startswith(("cf-", "cf-access-")):
                 headers.pop(k, None)
-
+        axiom_log("INFO", IP=IP, trace_id=trace_id,
+                  信息=f"访问端点 /{path} 转发请求")
+        axiom_log("INFO", IP=IP, trace_id=trace_id, 请求头=headers, 请求方法=method, 请求参数=query_params)
         logger.info(
             f"IP:{IP}访问端点 /{path}➡️转发请求➡️"
             f"方法: {method}"
@@ -234,29 +253,33 @@ async def forward_request(path: str, request: Request):
                 total += len(chunk)
                 yield chunk
             if total:
+                axiom_log("INFO", IP=IP, trace_id=trace_id, 请求体={first.decode('utf-8', 'replace')}, 请求体长度=total)
                 logger.info(
                     f"IP:{IP}访问端点 /{path}➡️请求体: "
                     f"{first.decode('utf-8', 'replace')}... (总长度: {total} bytes)"
                 )
             else:
+                axiom_log("INFO", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 请求体为空")
                 logger.info(f"IP:{IP}访问端点 /{path}➡️请求体为空")
 
-        return await _proxy_request(method, path, query_params, headers, body_iter(), IP)
+        return await _proxy_request(method, path, query_params, headers, body_iter(), IP, trace_id)
 
     except httpx.HTTPError as e:
+        axiom_log("ERROR", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求失败: {type(e).__name__}: {e}")
         logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=502, detail=f"转发请求失败: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail={"信息":f"转发请求失败: {type(e).__name__}: {e}","跟踪ID": trace_id})
 
     except Exception as e:
+        axiom_log("ERROR", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求失败: {type(e).__name__}: {e}")
         logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail={"信息":f"内部错误: {type(e).__name__}: {e}","跟踪ID": trace_id})
 
 
 def _strip_hop_headers(h: dict) -> dict:
     return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
 
 
-async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body_iter: AsyncIterator[bytes], IP: str):
+async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body_iter: AsyncIterator[bytes], IP: str, trace_id: str):
     last_exc = None
     attempts = 3
 
@@ -268,6 +291,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
         url = f"{base_url}/{path.lstrip('/')}"
         if query_params:
             url = f"{url}?{query_params}"
+        axiom_log("INFO", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求分配端点: {base_url}，Key: {ep['api_key'][:5]}...")
         logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Key: {ep['api_key'][:5]}...")
         up_headers = dict(headers)
         up_headers["authorization"] = f"Bearer {ep['api_key']}"
@@ -287,7 +311,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
             resp_cm = client.stream(method, url, headers=up_headers, content=body_iter)
             resp = await resp_cm.__aenter__()
             entered = True
-
+            axiom_log("INFO", IP=IP, trace_id=trace_id, 响应头={dict(resp.headers)}, 响应状态=resp.status_code)
             logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
 
             async def byte_iter():
@@ -300,11 +324,13 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         lstres = (lstres + chunk)[-200:]  # 尾部滚动窗口
                         yield chunk
                     if firstres or lstres:
+                        axiom_log("INFO", IP=IP, trace_id=trace_id, 响应体=str({firstres.decode('utf-8', 'replace')})+"......"+str(lstres.decode('utf-8', 'replace')))
                         logger.info(
                             f"IP:{IP}访问端点 /{path}➡️转发请求响应体: "
                             f"➡️{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}⬅️"
                         )
                     else:
+                        axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求响应体为空")
                         logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
                 except (httpx.StreamClosed,
                                 httpx.ReadError,
@@ -316,6 +342,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                                 asyncio.CancelledError,
                                 ConnectionResetError,
                                 BrokenPipeError) as e:
+                        axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 发生错误，流式中断: {type(e).__name__}: {e}")
                         logger.warning(f"IP:{IP}访问端点 /{path}➡️发生错误，流式中断: {type(e).__name__}: {e}")
                         return
                 finally:
@@ -339,6 +366,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                     await resp_cm.__aexit__(None, None, None)
                 except Exception:
                     pass
+            axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求失败: {type(e).__name__}: {e}")
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
             last_exc = e
 
@@ -348,13 +376,16 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                     await resp_cm.__aexit__(None, None, None)
                 except Exception:
                     pass
+            axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求失败: {type(e).__name__}: {e}")
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
             last_exc = e
         if attempt < attempts:
+            axiom_log("WARNING", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求失败，开始重试第 {attempt + 1} 次")
             logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败，开始重试第 {attempt + 1} 次")
             await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
-    logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(last_exc).__name__}: {last_exc}")
-    raise HTTPException(status_code=502, detail=f"上游连接失败：{type(last_exc).__name__}: {last_exc}")
+    axiom_log("ERROR", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 转发请求失败，上游连接失败: {type(last_exc).__name__}: {last_exc}")
+    logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败，上游连接失败: {type(last_exc).__name__}: {last_exc}")
+    raise HTTPException(status_code=502, detail={"信息":f"上游连接失败: {type(last_exc).__name__}: {last_exc}","跟踪ID": trace_id})
 
 
 if __name__ == "__main__":
@@ -366,8 +397,11 @@ if __name__ == "__main__":
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).disabled = True
     # 启动前日志
+    axiom_log("INFO", 信息=f"启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
     logger.info(f"✅ 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
+    axiom_log("INFO", 信息=f"配置了 {len(config.get_all_providers_info())} 个供应商")
     logger.info(f"✅ 配置了 {len(config.get_all_providers_info())} 个供应商")
+    axiom_log("INFO", 信息=f"当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
     logger.info(f"✅ 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
 
     uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'], http="h11", timeout_keep_alive=120,
