@@ -326,6 +326,7 @@ async def _proxy_request(method: str, path: str, query_params: str, headers: dic
                         length += len(chunk)
                         yield chunk
                     if firstres or lstres:
+                        
                         axiom_log("INFO", IP=IP, trace_id=trace_id, 响应体=f"{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}"
                                   ,总长度=length)
                         logger.info(
