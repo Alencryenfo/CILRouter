@@ -39,6 +39,8 @@ PORT: int = int(os.getenv('PORT', '8000'))
 
 # 日志级别
 LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO').upper()
+AXIOM_ENABLED: bool = os.getenv('AXIOM_ENABLED', 'false').lower() == 'true'
+AXIOM_ENDPOINT: str = os.getenv('AXIOM_ENDPOINT', 'http://127.0.0.1/')
 
 # 供应商配置
 PROVIDERS: List[Dict[str, List[str]]] = load_providers_from_env()
@@ -66,6 +68,13 @@ def get_server_config() -> Dict[str, Any]:
 def get_log_level() -> str:
     """获取日志级别"""
     return LOG_LEVEL
+
+def is_axiom_enabled() -> bool:
+    return AXIOM_ENABLED == True
+
+def get_axiom_endpoint() -> str:
+    """获取 Axiom 端点"""
+    return AXIOM_ENDPOINT
 
 def get_provider_info(index: int) -> Dict[str, Any]:
     """获取指定供应商的详细信息"""
@@ -121,7 +130,7 @@ def get_rate_limit_config() -> Dict[str, Any]:
 def reload_config():
     """重新加载配置（主要用于运行时更新环境变量）"""
     global CNT,PROVIDERS, CURRENT_PROVIDER_INDEX, REQUEST_TIMEOUT, STREAM_TIMEOUT, HOST, PORT, AUTH_KEY, RATE_LIMIT_ENABLED, \
-        RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY,LOG_LEVEL
+        RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY,LOG_LEVEL, AXIOM_ENABLED,AXIOM_ENDPONT
 
     CNT = 0
 
@@ -131,6 +140,8 @@ def reload_config():
 
     # 日志级别
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+    AXIOM_ENABLED = os.getenv('AXIOM_ENABLED', 'false').lower() == 'true'
+    AXIOM_ENDPOINT = os.getenv('AXIOM_ENDPOINT', 'http://127.0.0.1/')
 
     # 供应商配置
     PROVIDERS = load_providers_from_env()

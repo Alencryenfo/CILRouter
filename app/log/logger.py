@@ -6,7 +6,7 @@ CIL Router 日志配置模块
 
 import logging
 import sys
-import re
+import secrets
 
 def setup_logger(
     log_level: str,
@@ -54,13 +54,9 @@ def get_logger() -> logging.Logger:
         _default_logger = setup_logger("INFO")
     return _default_logger
 
-def oneline(b: bytes) -> str:
-    s = b.decode("utf-8", errors="replace")
-    # 1) 把换行符/回车转为可见的 \n \r
-    s = s.replace("\r", r"\r").replace("\n", r"\n")
-    # 2) 可选：再把其它不可见空白压扁（保留空格）
-    s = re.sub(r"[ \t\f\v]+", " ", s)
-    return s
+def get_trace_id()-> str:
+    ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    return ''.join(secrets.choice(ALPHABET) for _ in range(20))
 
 # 便捷的日志函数
 def debug(msg, *args, **kwargs):
