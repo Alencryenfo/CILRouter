@@ -1,9 +1,10 @@
 import httpx
 import sys
 import os
-from app.config import config
+from app.config import config,get_axiom_endpoint
 
 ENABLE = config.is_axiom_enabled()
+ENDPOINT = get_axiom_endpoint()
 
 def _caller_info(stacklevel) -> dict:
     """
@@ -41,7 +42,7 @@ def axiom_log(level: str, **fields) -> None:
     try:
         with httpx.Client() as client:
             # 发送 JSON 数组（多数接收端更通用；需要 NDJSON 的话可自行调整）
-            r = client.post(config.get_axiom_endpionoint(), json=[event])
+            r = client.post(ENDPOINT, json=[event])
             r.raise_for_status()
     except httpx.RequestError as e:
         print(f"Axiom上报出现错误: {e}")
