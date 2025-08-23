@@ -1,3 +1,6 @@
+# 如果需要二次开发请Fork Production分支，当前分支存在较大问题且作者最近时间较紧未维护，Bug较多
+
+
 # CIL Router - 极简版 Claude Code API 转发器
 
 <div align="center">
