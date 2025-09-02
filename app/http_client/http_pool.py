@@ -3,6 +3,7 @@
 import httpx
 from typing import Dict
 from asyncio import Lock
+from app.log.logger import debug, info
 
 # 说明：
 # - 为每个 base_url 复用一个 AsyncClient，避免高并发下频繁建连/握手。
@@ -20,6 +21,7 @@ async def get_client_for(base_url: str) -> httpx.AsyncClient:
     async with _client_lock:
         cli = _client_pool.get(base_url)
         if cli is not None:
+            debug(event="http_client_reuse", base_url=base_url)
             return cli
         timeout = httpx.Timeout(
             connect=5.0,   # 连接超时：短一些便于快速失败+重试
@@ -43,6 +45,7 @@ async def get_client_for(base_url: str) -> httpx.AsyncClient:
             transport=transport
         )
         _client_pool[base_url] = cli
+        info(event="http_client_created", base_url=base_url)
         return cli
 
 async def close_all_clients() -> None:
@@ -50,6 +53,10 @@ async def close_all_clients() -> None:
     在应用关闭时调用，确保所有 AsyncClient 被正确关闭，释放连接与句柄。
     """
     async with _client_lock:
-        for cli in _client_pool.values():
-            await cli.aclose()
+        for base_url, cli in list(_client_pool.items()):
+            try:
+                await cli.aclose()
+                debug(event="http_client_closed", base_url=base_url)
+            except Exception as e:
+                debug(event="http_client_close_error", base_url=base_url, error=type(e).__name__)
         _client_pool.clear()

@@ -16,7 +16,9 @@ from app.config import config
 from app.http_client.http_pool import get_client_for, close_all_clients
 from app.middleware.anti_abuse import RateLimiter, AntiAbuseMiddleware
 from app.middleware.request_prep import RequestPrepMiddleware
-
+from app.log.logger import debug, info, error
+import time
+from urllib.parse import urlparse
 
 # 响应侧需要移除的头（与旧版相同）
 HOP_HEADERS = (
@@ -33,8 +35,10 @@ HOP_HEADERS = (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
+        info(event="app_start")
         yield
     finally:
+        info(event="app_shutdown")
         await close_all_clients()
 
 app = FastAPI(title="CILRouter", description="极简透明转发", version="1.1.0",
@@ -71,12 +75,14 @@ def _strip_hop_headers(h: dict) -> dict:
 
 @app.get("/")
 async def root():
-    return {
+    payload = {
         "name": "CIL Router",
         "version": "1.1.0",
         "providers": len(config.get_all_providers_info()),
         "current_provider": config.CURRENT_PROVIDER_INDEX,
     }
+    debug(event="root", current_provider=payload["current_provider"]) 
+    return payload
 
 
 @app.get("/favicon.ico")
@@ -95,6 +101,12 @@ async def forward(path: str, request: Request):
         url = f"{base_url}/{path.lstrip('/')}"
         if request.url.query:
             url = f"{url}?{request.url.query}"
+
+
+        parsed = urlparse(base_url)
+        upstream_host = parsed.netloc or base_url
+        t0 = time.perf_counter()
+        info(event="forward_start", trace_id=getattr(request.state, "trace_id", None), method=method, path=f"/{path}", upstream=upstream_host)
 
         # 透传请求体（流式）
         async def body_iter() -> AsyncIterator[bytes]:
@@ -122,6 +134,7 @@ async def forward(path: str, request: Request):
                     pass
 
         # 返回流式响应，移除逐跳头
+        info(event="forward_response", trace_id=getattr(request.state, "trace_id", None), status=resp.status_code, upstream=upstream_host, duration_ms=round((time.perf_counter()-t0)*1000, 2))
         return StreamingResponse(
             resp_bytes(),
             status_code=resp.status_code,
@@ -129,14 +142,17 @@ async def forward(path: str, request: Request):
         )
 
     except httpx.HTTPError as e:
+        error(event="forward_upstream_error", trace_id=getattr(request.state, "trace_id", None), error=type(e).__name__)
         raise HTTPException(status_code=502, detail=f"上游连接失败: {type(e).__name__}: {e}")
     except Exception as e:
+        error(event="forward_internal_error", trace_id=getattr(request.state, "trace_id", None), error=type(e).__name__)
         raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":
     import uvicorn
     # 禁用访问日志并降低日志级别，避免控制台输出
+
     uvicorn.run(
         app,
         host="0.0.0.0",

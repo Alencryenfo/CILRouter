@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import config
+from app.log.logger import debug, info, warning
 
 
 PROHIBIT_HEADERS = {
@@ -87,10 +88,18 @@ class RequestPrepMiddleware(BaseHTTPMiddleware):
         skip_auth = (self.auth_skip_paths and path in self.auth_skip_paths) or any(
             path.startswith(p) for p in self.auth_skip_prefixes
         )
-        if self.enforce_auth and not skip_auth and not self._auth_ok(request):
-            return JSONResponse({"detail": "鉴权错误"}, status_code=401)
+        if self.enforce_auth:
+            if skip_auth:
+                debug(event="auth_skipped", path=path)
+            else:
+                if not self._auth_ok(request):
+                    warning(event="auth_failed", path=path)
+                    return JSONResponse({"detail": "鉴权错误"}, status_code=401)
+                else:
+                    debug(event="auth_ok", path=path)
 
         # 净化头，供路由使用
         request.state.headers = self._sanitize_headers(request)
+        debug(event="headers_sanitized", path=path)
 
         return await call_next(request)

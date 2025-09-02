@@ -14,6 +14,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 import ipaddress
+from app.log.logger import debug, info
 
 
 @dataclass
@@ -153,18 +154,24 @@ class AntiAbuseMiddleware(BaseHTTPMiddleware):
         return "".join(secrets.choice(alphabet) for _ in range(16))
 
     async def dispatch(self, request: Request, call_next):
-        # 路径放行：命中白名单则不做限流
         path = request.url.path
+        # 生成追踪信息（即使命中白名单也有 trace_id）
+        request.state.ip = self._get_client_ip(request)
+        request.state.trace_id = self._get_trace_id()
+        debug(event="client_identified", ip=request.state.ip, path=path, trace_id=request.state.trace_id)
+
+        # 路径放行：命中白名单则不做限流
         if (self.allow_paths and path in self.allow_paths) or any(
             path.startswith(p) for p in self.allow_prefixes
         ):
+            debug(event="rate_limit_skip", reason="path_whitelist", path=path, trace_id=request.state.trace_id)
             return await call_next(request)
-
-        request.state.ip = self._get_client_ip(request)
-        request.state.trace_id = self._get_trace_id()
         if not self.enabled or not self.rate_limiter:
+            debug(event="rate_limit_disabled", path=path, trace_id=request.state.trace_id)
             return await call_next(request)
         allowed = await self.rate_limiter.check(request.state.ip)
         if not allowed:
+            info(event="rate_limited", ip=request.state.ip, path=path, trace_id=request.state.trace_id)
             return JSONResponse({"detail": "触发限流"}, status_code=429)
+        debug(event="rate_limit_ok", ip=request.state.ip, path=path, trace_id=request.state.trace_id)
         return await call_next(request)
