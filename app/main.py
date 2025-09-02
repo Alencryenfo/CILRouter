@@ -42,24 +42,7 @@ app = FastAPI(title="CILRouter", description="极简透明转发", version="1.1.
 
 # 公共放行路径/前缀（最小化：仅首页与图标）
 PUBLIC_EXACT = {"/", "/favicon.ico"}
-PUBLIC_PREFIX = {}
-"""
-- 公共精确路径 PUBLIC_EXACT: 精确匹配放行。只在路径完全等于集合中的某一项时放行。例：
-    - "/" 仅放行根路径；
-    - "/favicon.ico" 不放行 "/favicon.ico/" 或 "/favicon.ico?v=1" 的路径部分（查询串不参与匹配）。
-    - "/favicon.ico" 不放行 "/favicon.ico/" 或 "/favicon.ico?v=1" 的路径部分（查询串不参与匹配）。
-- 
-公共前缀 PUBLIC_PREFIX: 前缀匹配放行。只要请求路径以其中任一前缀开头即放行。例：
-    - ("/metrics",) 放行 "/metrics"、"/metrics/"、"/metrics/a/b"，但不放行 "/metric"。
-    - 注意不要用 "/" 作为前缀，否则等于放行全部路径。
-- 
-适用场景
-    - 用 PUBLIC_EXACT 放行固定路径，如 "/"、"/health"、"/favicon.ico"。
-    - 用 PUBLIC_PREFIX 放行一组接口，如 "/docs"、"/static/"、"/metrics" 整段。
-- 
-组合逻辑
-    - 命中任一即可放行：先检查是否在 PUBLIC_EXACT，再检查是否 startswith 任一 PUBLIC_PREFIX。
-"""
+PUBLIC_PREFIX = tuple()
 # 反滥用配置
 rate_limit_config = config.get_rate_limit_config()
 app.add_middleware(
@@ -70,8 +53,8 @@ app.add_middleware(
     ),
     enabled=rate_limit_config["RATE_LIMIT_ENABLED"],
     trust_proxy=rate_limit_config["RATE_LIMIT_TRUST_PROXY"],
-    allow_paths={},
-    allow_prefixes={},
+    allow_paths=PUBLIC_EXACT,
+    allow_prefixes=PUBLIC_PREFIX,
 )
 
 # 鉴权与头清理（仅跳过鉴权，仍做头净化）
@@ -119,8 +102,12 @@ async def forward(path: str, request: Request):
                 if chunk:
                     yield chunk
 
+        # 在净化后的请求头基础上，追加上游鉴权头
+        headers = dict(request.state.headers)
+        headers["authorization"] = f"Bearer {ep['api_key']}"
+
         client = await get_client_for(base_url)
-        cm = client.stream(method, url, headers=request.state.headers, content=body_iter())
+        cm = client.stream(method, url, headers=headers, content=body_iter())
         resp = await cm.__aenter__()
 
         async def resp_bytes() -> AsyncIterator[bytes]:
