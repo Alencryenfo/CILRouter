@@ -3,13 +3,11 @@ FROM python:3.10-slim
 # 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    gcc \
+# 安装最小系统依赖（仅用于 HEALTHCHECK）
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    iputils-ping \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # 创建非root用户（安全最佳实践）
 RUN groupadd -r cilrouter && useradd -r -g cilrouter cilrouter
@@ -32,8 +30,10 @@ RUN mkdir -p /app/logs \
 USER cilrouter
 
 # 设置环境变量
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # 暴露端口
 EXPOSE 8000
@@ -42,5 +42,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
-# 启动命令
+# 启动命令（使用应用内 uvicorn.run 配置）
 CMD ["python", "app/main.py"]

@@ -1,374 +1,159 @@
-# -*- coding: utf-8 -*-
 """
-CIL Router - 极简版 Claude API 转发器
-支持所有HTTP方法，完全透明转发，智能处理API Key和流式请求
+最简洁的转发版主程序：
+- 仅保留根路由和通用转发
+- 复用 httpx 连接池，按当前供应商转发
+- 移除限流与复杂日志采样
 """
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse, Response
-import httpx
 from contextlib import asynccontextmanager
-import anyio
-import asyncio
-
 from typing import AsyncIterator
+
+import httpx
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+
 from app.config import config
-from app.middleware.rate_limiter import RateLimiter, RateLimitMiddleware
-from app.log import setup_logger
 from app.http_client.http_pool import get_client_for, close_all_clients
+from app.middleware.anti_abuse import RateLimiter, AntiAbuseMiddleware
+from app.middleware.request_prep import RequestPrepMiddleware
 
-logger = setup_logger(
-    log_level=config.get_log_level(),
+
+# 响应侧需要移除的头（与旧版相同）
+HOP_HEADERS = (
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "upgrade",
+    "te",
+    "trailer",
+    "content-encoding",
 )
-
-provider_lock = asyncio.Lock()
-PROHIBIT_HEADERS = {
-    # 逐跳 / 连接管理
-    "authorization", "Authorization",
-    "host", "Host",
-    "connection", "Connection",
-    "keep-alive", "Keep-Alive",
-    "proxy-connection", "Proxy-Connection",
-    "transfer-encoding", "Transfer-Encoding",
-    "te", "TE",
-    "trailer", "Trailer",
-    "upgrade", "Upgrade",
-
-    # 长度 / 期望（交给 httpx 自己计算）
-    "content-length", "Content-Length",
-    "expect", "Expect",
-
-    # CDN / 代理痕迹（固定名）
-    "cdn-loop", "CDN-Loop",
-    "x-forwarded-for", "X-Forwarded-For",
-    "x-forwarded-proto", "X-Forwarded-Proto",
-    "x-forwarded-host", "X-Forwarded-Host",
-    "x-forwarded-server", "X-Forwarded-Server",
-    "x-forwarded-port", "X-Forwarded-Port",
-    "x-real-ip", "X-Real-IP",
-    "true-client-ip", "True-Client-IP",
-    "via", "Via",
-    "forwarded", "Forwarded",
-
-    # x-api-key 相关（交给 httpx 自己处理）
-    "x-api-key", "X-Api-Key",
-}
-HOP_HEADERS = ("transfer-encoding",  "connection", "keep-alive",
-               "proxy-connection", "upgrade", "te", "trailer", "content-encoding")
-TRANSIENT_EXC = (
-    httpx.ConnectError, httpx.ConnectTimeout,
-    httpx.ReadTimeout, httpx.ReadError,
-    httpx.RemoteProtocolError, httpx.PoolTimeout,
-)
-rate_limit_config = config.get_rate_limit_config()
-RATE_LIMIT_ENABLED = rate_limit_config["RATE_LIMIT_ENABLED"]
-rl = RateLimiter(
-    rpm=rate_limit_config["RATE_LIMIT_RPM"],
-    burst_size=rate_limit_config["RATE_LIMIT_BURST_SIZE"]
-) if RATE_LIMIT_ENABLED else None
-
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     try:
-        if rl:
-            await rl.start()
         yield
     finally:
-        if rl:
-            await rl.close()
         await close_all_clients()
 
-
-app = FastAPI(title="CILRouter", description="Claude Code透明代理", version="1.0.2",
+app = FastAPI(title="CILRouter", description="极简透明转发", version="1.1.0",
               docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
+# 公共放行路径/前缀（最小化：仅首页与图标）
+PUBLIC_EXACT = {"/", "/favicon.ico"}
+PUBLIC_PREFIX = {}
+"""
+- 公共精确路径 PUBLIC_EXACT: 精确匹配放行。只在路径完全等于集合中的某一项时放行。例：
+    - "/" 仅放行根路径；
+    - "/favicon.ico" 不放行 "/favicon.ico/" 或 "/favicon.ico?v=1" 的路径部分（查询串不参与匹配）。
+    - "/favicon.ico" 不放行 "/favicon.ico/" 或 "/favicon.ico?v=1" 的路径部分（查询串不参与匹配）。
+- 
+公共前缀 PUBLIC_PREFIX: 前缀匹配放行。只要请求路径以其中任一前缀开头即放行。例：
+    - ("/metrics",) 放行 "/metrics"、"/metrics/"、"/metrics/a/b"，但不放行 "/metric"。
+    - 注意不要用 "/" 作为前缀，否则等于放行全部路径。
+- 
+适用场景
+    - 用 PUBLIC_EXACT 放行固定路径，如 "/"、"/health"、"/favicon.ico"。
+    - 用 PUBLIC_PREFIX 放行一组接口，如 "/docs"、"/static/"、"/metrics" 整段。
+- 
+组合逻辑
+    - 命中任一即可放行：先检查是否在 PUBLIC_EXACT，再检查是否 startswith 任一 PUBLIC_PREFIX。
+"""
+# 反滥用配置
+rate_limit_config = config.get_rate_limit_config()
 app.add_middleware(
-    RateLimitMiddleware,
-    rate_limiter=rl,  # 可能为 None；中间件内部需判断 enabled
-    enabled=RATE_LIMIT_ENABLED,
-    trust_proxy=rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
+    AntiAbuseMiddleware,
+    rate_limiter=RateLimiter(
+        rpm=rate_limit_config["RATE_LIMIT_RPM"],
+        burst_size=rate_limit_config["RATE_LIMIT_BURST"]
+    ),
+    enabled=rate_limit_config["RATE_LIMIT_ENABLED"],
+    trust_proxy=rate_limit_config["RATE_LIMIT_TRUST_PROXY"],
+    allow_paths={},
+    allow_prefixes={},
 )
 
-
-def get_request_ip(request: Request) -> str:
-    """获取客户端IP地址，复用中间件逻辑"""
-    trust_proxy = rate_limit_config["RATE_LIMIT_TRUST_PROXY"]
-    # 如果不信任代理，直接使用连接IP
-    if not trust_proxy:
-        if request.client and hasattr(request.client, 'host') and request.client.host:
-            return request.client.host
-        return "unknown-client"
-    # 信任代理的情况下，按优先级获取真实IP
-    # 1. CF-Connecting-IP: Cloudflare 提供的原始客户端IP（最可靠）
-    cf_connecting_ip = request.headers.get("CF-Connecting-IP")
-    if cf_connecting_ip:
-        return cf_connecting_ip.strip()
-    # 2. CF-IPCountry 存在时，说明经过了 Cloudflare，但没有 CF-Connecting-IP
-    if request.headers.get("CF-IPCountry"):
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            first_ip = forwarded_for.split(",")[0].strip()
-            return first_ip
-    # 3. X-Real-IP: nginx 等反向代理设置的真实IP
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-    # 4. X-Forwarded-For: 标准代理头部（取第一个IP）
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        first_ip = forwarded_for.split(",")[0].strip()
-        return first_ip
-    # 5. 最后使用连接IP
-    if request.client and hasattr(request.client, 'host') and request.client.host:
-        return request.client.host
-    logger.warning("❌无法获取客户端IP，需要检查可能的攻击")
-    return "unknown-client"
-
-
-@app.get("/")
-async def root(request: Request):
-    """根路径，返回当前状态"""
-    IP = get_request_ip(request)
-    if not IP == "127.0.0.1":
-        logger.info(f"IP:{get_request_ip(request)}访问端点 /")
-    return {
-        "应用名称": "CIL Router",
-        "当前版本": "1.0.2",
-        "当前供应商": config.CURRENT_PROVIDER_INDEX,
-        "全部供应商信息": config.get_all_providers_info(),
-    }
-
-
-@app.get("/favicon.ico")
-async def favicon():
-    return Response(status_code=204)
-
-
-@app.post("/select")
-async def select_provider(request: Request):
-    """
-    选择供应商接口
-    POST 一个数字表示要使用的供应商索引
-    """
-    IP = get_request_ip(request)
-    try:
-        logger.info(f"IP:{IP}访问端点 /select")
-        body = await request.body()
-        index = int(body.decode().strip())
-        if config.set_provider_index(index):
-            logger.info(f"IP:{IP}访问端点 /select➡️成功，切换到供应商 {index}")
-            return {
-                "success": True,
-                "message": f"已切换到供应商 {index}",
-                "供应商信息": config.get_provider_info(index)
-            }
-        else:
-            logger.warning(f"❌IP:{IP}访问端点 /select➡️失败，索引 {index} 无效")
-            raise HTTPException(
-                status_code=400,
-                detail=f"无效的供应商索引 {index}"
-            )
-    except ValueError:
-        logger.error(f"IP:{IP}访问端点 /select➡️发生错误: 请求体不是一个数字")
-        raise HTTPException(status_code=400, detail="请求体不是一个数字")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"IP:{IP}访问端点 /select➡️发生错误: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
-
-
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
-async def forward_request(path: str, request: Request):
-    """
-    通用转发接口
-    支持所有HTTP方法，完全透明转发
-    智能处理API Key：如果请求中有Authorization头部则替换，没有则添加
-    支持流式响应
-    """
-    IP = get_request_ip(request)
-    logger.info(f"IP:{IP}访问端点 /{path}")
-    try:
-        # 鉴权检查
-        auth_key = (config.get_request_config()["AUTH_KEY"]).strip()
-        if auth_key:
-            auth_header = (request.headers.get('authorization', '')).strip()
-            if not auth_header.lower().startswith('bearer '):
-                logger.warning(f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 缺少Bearer令牌")
-                raise HTTPException(status_code=401, detail="缺少鉴权令牌")
-            if auth_header[7:] != auth_key:
-                logger.warning(f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 令牌无效")
-                raise HTTPException(status_code=401, detail="令牌无效")
-
-        # 请求方法
-        method = request.method.upper()
-
-        # 目标URL
-        query_params = str(request.url.query)
-
-        # 请求头处理
-        headers = dict(request.headers)
-        for k in PROHIBIT_HEADERS:
-            headers.pop(k, None)
-        for k in list(headers.keys()):
-            kl = k.lower()
-            if kl.startswith(("cf-", "cf-access-")):
-                headers.pop(k, None)
-
-        logger.info(
-            f"IP:{IP}访问端点 /{path}➡️转发请求➡️"
-            f"方法: {method}"
-            f"{('，参数: ' + str(query_params)) if query_params else ''}➡️"
-            f"请求头: {headers}➡️"
-        )
-
-        async def body_iter():
-            """记录首段请求体并流式转发"""
-            first = b""
-            total = 0
-            async for chunk in request.stream():
-                if len(first) < 200:
-                    need = 200 - len(first)
-                    first += chunk[:need]
-                total += len(chunk)
-                yield chunk
-            if total:
-                logger.info(
-                    f"IP:{IP}访问端点 /{path}➡️请求体: "
-                    f"{first.decode('utf-8', 'replace')}... (总长度: {total} bytes)"
-                )
-            else:
-                logger.info(f"IP:{IP}访问端点 /{path}➡️请求体为空")
-
-        return await _proxy_request(method, path, query_params, headers, body_iter(), IP)
-
-    except httpx.HTTPError as e:
-        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=502, detail=f"转发请求失败: {type(e).__name__}: {e}")
-
-    except Exception as e:
-        logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
+# 鉴权与头清理（仅跳过鉴权，仍做头净化）
+app.add_middleware(
+    RequestPrepMiddleware,
+    auth_skip_paths=PUBLIC_EXACT,
+    auth_skip_prefixes=PUBLIC_PREFIX,
+)
 
 
 def _strip_hop_headers(h: dict) -> dict:
     return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
 
 
-async def _proxy_request(method: str, path: str, query_params: str, headers: dict, body_iter: AsyncIterator[bytes], IP: str):
-    last_exc = None
-    attempts = 3
+@app.get("/")
+async def root():
+    return {
+        "name": "CIL Router",
+        "version": "1.1.0",
+        "providers": len(config.get_all_providers_info()),
+        "current_provider": config.CURRENT_PROVIDER_INDEX,
+    }
 
-    for attempt in range(1, attempts + 1):
-        async with provider_lock:
-            ep = config.get_current_provider_endpoint()
 
+@app.get("/favicon.ico")
+async def favicon():
+    return JSONResponse({"detail": "未设置"},status_code=204)
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"])
+async def forward(path: str, request: Request):
+    method = request.method.upper()
+
+    try:
+        # 获得请求端点
+        ep = config.get_current_provider_endpoint()
         base_url = ep["base_url"].rstrip("/")
         url = f"{base_url}/{path.lstrip('/')}"
-        if query_params:
-            url = f"{url}?{query_params}"
-        logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Key: {ep['api_key'][:5]}...")
-        up_headers = dict(headers)
-        up_headers["authorization"] = f"Bearer {ep['api_key']}"
-        up_headers["accept-encoding"] = "identity"
+        if request.url.query:
+            url = f"{url}?{request.url.query}"
 
-        # timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
-        # limits = httpx.Limits(max_keepalive_connections=100, max_connections=100, keepalive_expiry=30.0)
-        # transport = httpx.AsyncHTTPTransport(http2=False, retries=0)
-        # client = httpx.AsyncClient(timeout=timeout, limits=limits, transport=transport)
-        client = await get_client_for(base_url) # 连接池获取客户端
-        resp_cm = None
-        resp = None
-        entered = False
-        returned = False
+        # 透传请求体（流式）
+        async def body_iter() -> AsyncIterator[bytes]:
+            async for chunk in request.stream():
+                if chunk:
+                    yield chunk
 
-        try:
-            resp_cm = client.stream(method, url, headers=up_headers, content=body_iter)
-            resp = await resp_cm.__aenter__()
-            entered = True
+        client = await get_client_for(base_url)
+        cm = client.stream(method, url, headers=request.state.headers, content=body_iter())
+        resp = await cm.__aenter__()
 
-            logger.info(f"IP:{IP}访问端点 /{path}➡️转发请求响应头: {dict(resp.headers)}➡️响应状态: {resp.status_code}")
-
-            async def byte_iter():
-                try:
-                    firstres = b''
-                    lstres = b''
-                    async for chunk in resp.aiter_bytes():
-                        if not firstres and chunk:
-                            firstres = chunk[:200]  # 仅首块采样
-                        lstres = (lstres + chunk)[-200:]  # 尾部滚动窗口
+        async def resp_bytes() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
                         yield chunk
-                    if firstres or lstres:
-                        logger.info(
-                            f"IP:{IP}访问端点 /{path}➡️转发请求响应体: "
-                            f"➡️{firstres.decode('utf-8', 'replace')}......{lstres.decode('utf-8', 'replace')}⬅️"
-                        )
-                    else:
-                        logger.warning(f"IP:{IP}访问端点 /{path}➡️转发请求响应体为空")
-                except (httpx.StreamClosed,
-                                httpx.ReadError,
-                                httpx.RemoteProtocolError,
-                                httpx.ReadTimeout,  # ★ 新增
-                                anyio.EndOfStream,
-                                anyio.ClosedResourceError,
-                                anyio.BrokenResourceError,
-                                asyncio.CancelledError,
-                                ConnectionResetError,
-                                BrokenPipeError) as e:
-                        logger.warning(f"IP:{IP}访问端点 /{path}➡️发生错误，流式中断: {type(e).__name__}: {e}")
-                        return
-                finally:
-                    # ★ 只在生成器结束时关闭上游响应上下文
-                    try:
-                        await resp_cm.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-
-            returned = True
-            return StreamingResponse(
-                byte_iter(),
-                status_code=resp.status_code,
-                headers=_strip_hop_headers(resp.headers),
-            )
-
-        except TRANSIENT_EXC as e:
-            # 抛错且尚未返回 -> 兜底关闭
-            if entered and resp_cm is not None and not returned:
+            finally:
                 try:
-                    await resp_cm.__aexit__(None, None, None)
+                    await cm.__aexit__(None, None, None)
                 except Exception:
                     pass
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-            last_exc = e
 
-        except Exception as e:
-            if entered and resp_cm is not None and not returned:
-                try:
-                    await resp_cm.__aexit__(None, None, None)
-                except Exception:
-                    pass
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败: {type(e).__name__}: {e}")
-            last_exc = e
-        if attempt < attempts:
-            logger.warning(f"❌IP:{IP}访问端点 /{path}➡️转发请求失败，开始重试第 {attempt + 1} 次")
-            await asyncio.sleep(0.8 * (2 ** (attempt - 1)))
-    logger.error(f"IP:{IP}访问端点 /{path}➡️转发请求失败: {type(last_exc).__name__}: {last_exc}")
-    raise HTTPException(status_code=502, detail=f"上游连接失败：{type(last_exc).__name__}: {last_exc}")
+        # 返回流式响应，移除逐跳头
+        return StreamingResponse(
+            resp_bytes(),
+            status_code=resp.status_code,
+            headers=_strip_hop_headers(dict(resp.headers)),
+        )
+
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"上游连接失败: {type(e).__name__}: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"内部错误: {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":
     import uvicorn
-
-    server_config = config.get_server_config()
-    import logging
-
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-        logging.getLogger(name).disabled = True
-    # 启动前日志
-    logger.info(f"✅ 启动 CIL Router 在 {server_config['HOST']}:{server_config['PORT']}")
-    logger.info(f"✅ 配置了 {len(config.get_all_providers_info())} 个供应商")
-    logger.info(f"✅ 当前使用供应商 {config.CURRENT_PROVIDER_INDEX}")
-
-    uvicorn.run(app, host=server_config['HOST'], port=server_config['PORT'], http="h11", timeout_keep_alive=120,
-                access_log=False)
+    # 禁用访问日志并降低日志级别，避免控制台输出
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        access_log=False,
+        log_level="critical",
+    )
