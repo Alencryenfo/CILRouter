@@ -31,7 +31,6 @@ English | [简体中文](README.md)
   - [Docker Compose Deployment (Recommended)](#docker-compose-deployment-recommended)
 - [Configuration](#configuration)
   - [Environment Variable Configuration](#environment-variable-configuration)
-  - [Code Configuration](#code-configuration)
 - [API Documentation](#api-documentation)
   - [Basic Endpoints](#basic-endpoints)
   - [Forwarding Endpoints](#forwarding-endpoints)
@@ -64,7 +63,7 @@ English | [简体中文](README.md)
 ### Technical Features
 - ⚡ **High Performance** - Based on FastAPI and httpx, supports async concurrency
 - 🐳 **Container Ready** - Complete Docker support and health checks
-- 🔧 **Flexible Configuration** - Supports both environment variables and code configuration
+- 🔧 **Flexible Configuration** - Supports `.env` files and system environment variables
 - 🛡️ **Secure and Reliable** - Optional API key authentication features
 - 📊 **Monitoring Friendly** - Built-in status endpoints and health checks
 
@@ -96,13 +95,9 @@ curl http://localhost:8000/
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Configure providers (choose one)
-# Method A: Environment variable configuration
+# 2. Configure environment variables
 cp .env.example .env
 vim .env
-
-# Method B: Code configuration
-vim config/config.py
 
 # 3. Start the service
 python app/main.py
@@ -158,21 +153,6 @@ PROVIDER_1_API_KEY=your-key-2
 HOST=0.0.0.0
 PORT=8000
 CURRENT_PROVIDER_INDEX=0
-```
-
-**Method B: Code Configuration**
-Edit `config/config.py`:
-```python
-DEFAULT_PROVIDERS = [
-    {
-        "base_url": "https://api.anthropic.com",
-        "api_key": "sk-ant-your-key-1"
-    },
-    {
-        "base_url": "https://api.provider2.com", 
-        "api_key": "your-key-2"
-    }
-]
 ```
 
 5. **Start the service**
@@ -237,8 +217,20 @@ CURRENT_PROVIDER_INDEX=0
 REQUEST_TIMEOUT=60
 STREAM_TIMEOUT=120
 
+# Logging configuration
+LOG_LEVEL=INFO
+CONSOLE_LOG_ENABLED=true
+AXIOM_ENABLED=false
+AXIOM_ENDPOINT=http://127.0.0.1/
+
 # Authentication configuration (optional)
 AUTH_KEY=your-secret-auth-key
+
+# Rate limiting configuration (optional)
+RATE_LIMIT_ENABLED=false
+RATE_LIMIT_RPM=100
+RATE_LIMIT_BURST=10
+RATE_LIMIT_TRUST_PROXY=true
 
 # Provider configuration
 PROVIDER_0_BASE_URL=https://api.anthropic.com
@@ -315,6 +307,14 @@ docker-compose -f docker-compose.prod.yml up -d
 | `REQUEST_TIMEOUT` | `60` | Regular request timeout (seconds) |
 | `STREAM_TIMEOUT` | `120` | Streaming request timeout (seconds) |
 
+#### Logging Configuration
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `INFO` | Log level, supports `DEBUG/INFO/WARNING/ERROR/CRITICAL` |
+| `CONSOLE_LOG_ENABLED` | `true` | Whether to print logs to stdout |
+| `AXIOM_ENABLED` | `false` | Whether to enable Axiom log delivery |
+| `AXIOM_ENDPOINT` | `http://127.0.0.1/` | Axiom ingestion endpoint |
+
 #### Authentication Configuration
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -350,35 +350,15 @@ PROVIDER_2_API_KEY=your-key-3a,your-key-3b
 **Notes:**
 - Indexes must start from 0 and be consecutive, no gaps allowed
 - Each provider requires both `BASE_URL` and `API_KEY` configuration
-- If an index is missing, subsequent providers will be ignored
-
-### Code Configuration
-
-If not using environment variables, you can directly modify the `config/config.py` file:
-
-```python
-# config/config.py
-DEFAULT_PROVIDERS = [
-    {
-        "base_url": "https://api.anthropic.com",
-        "api_key": "sk-ant-your-key-1"  # Enter your API Key here
-    },
-    {
-        "base_url": "https://api.provider2.com", 
-        "api_key": "your-key-2"  # Second provider's API Key
-    },
-    {
-        "base_url": "https://api.provider3.com",
-        "api_key": "your-key-3"  # Third provider's API Key
-    }
-]
-```
+- `PROVIDER_N_BASE_URL` and `PROVIDER_N_API_KEY` must be configured as a pair or startup will fail
+- Local runs automatically load the `.env` file in the project root
 
 ### Configuration Priority
 
 Configuration loading priority:
-1. **Environment Variables** - Highest priority
-2. **Code Configuration** - Used when environment variables don't exist
+1. **System environment variables**
+2. **Project root `.env` file**
+3. **Built-in defaults**
 
 ---
 
@@ -395,13 +375,17 @@ GET /
 **Response Example:**
 ```json
 {
-  "app": "CIL Router",
-  "version": "1.0.1",
-  "current_provider_index": 0,
-  "total_providers": 3,
-  "current_provider_endpoints": 1,
-  "current_provider_urls": ["https://api.anthropic.com"],
-  "load_balancing": "round_robin"
+  "应用名称": "CIL Router",
+  "当前版本": "1.0.3",
+  "当前供应商": 0,
+  "全部供应商信息": [
+    {
+      "供应商索引": 0,
+      "供应商端点数目": 1,
+      "供应商端点": ["https://api.anthropic.com"]
+    }
+  ],
+  "跟踪ID": "2T8H9x..."
 }
 ```
 
@@ -420,20 +404,24 @@ Content-Type: text/plain
 **Success Response:**
 ```json
 {
-  "success": true,
-  "message": "Switched to provider 1",
-  "current_index": 1,
-  "total_providers": 3
+  "状态": "成功",
+  "信息": "已切换到供应商 1",
+  "供应商信息": {
+    "供应商索引": 1,
+    "供应商端点数目": 1,
+    "供应商端点": ["https://api.provider2.com"]
+  },
+  "跟踪ID": "2T8H9x..."
 }
 ```
 
 **Error Response:**
 ```json
 {
-  "success": false,
-  "message": "Invalid provider index: 5. Valid range: 0-2",
-  "current_index": 0,
-  "total_providers": 3
+  "detail": {
+    "信息": "无效的供应商索引 5",
+    "跟踪ID": "2T8H9x..."
+  }
 }
 ```
 
@@ -845,13 +833,17 @@ curl http://localhost:8000/
 
 # Response example
 {
-  "app": "CIL Router",
-  "version": "1.0.1", 
-  "current_provider_index": 0,
-  "total_providers": 2,
-  "current_provider_endpoints": 1,
-  "current_provider_urls": ["https://api.anthropic.com"],
-  "load_balancing": "round_robin"
+  "应用名称": "CIL Router",
+  "当前版本": "1.0.3",
+  "当前供应商": 0,
+  "全部供应商信息": [
+    {
+      "供应商索引": 0,
+      "供应商端点数目": 1,
+      "供应商端点": ["https://api.anthropic.com"]
+    }
+  ],
+  "跟踪ID": "2T8H9x..."
 }
 ```
 
@@ -974,7 +966,7 @@ Error: Could not find config.config module
 Ensure project structure is complete with all necessary files:
 ```bash
 # Check project structure
-ls -la app/ config/
+ls -la app/ app/config/
 
 # Rebuild image
 docker build --no-cache -t cilrouter .
@@ -987,8 +979,17 @@ docker build --no-cache -t cilrouter .
 ```bash
 # Set log level
 export LOG_LEVEL=DEBUG
+export CONSOLE_LOG_ENABLED=true
 
 # Start service
+python app/main.py
+```
+
+To send logs to Axiom as well:
+
+```bash
+export AXIOM_ENABLED=true
+export AXIOM_ENDPOINT=https://your-axiom-endpoint
 python app/main.py
 ```
 
@@ -1017,13 +1018,12 @@ curl -v -X POST http://localhost:8000/v1/messages \
 
 ### Performance Optimization
 
-#### 1. Connection Pool Optimization
+#### 1. Upstream Endpoint Optimization
 
-Modify `config/config.py` to add connection pool configuration:
-```python
-# Connection pool configuration
-CONNECTION_POOL_SIZE = 100
-CONNECTION_POOL_MAX_SIZE = 1000
+Configure multiple endpoints for the same provider. The router will round-robin them and retry on failures:
+```bash
+PROVIDER_0_BASE_URL=https://api-1.example.com,https://api-2.example.com
+PROVIDER_0_API_KEY=key-1,key-2
 ```
 
 #### 2. Timeout Optimization
@@ -1064,18 +1064,13 @@ services:
 ```
 CILRouter/
 ├── app/
-│   ├── __init__.py
-│   └── main.py              # Main application file (FastAPI app)
-├── config/
-│   ├── __init__.py
-│   └── config.py            # Configuration management module
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py          # pytest configuration
-│   └── test_main.py         # Unit tests
+│   ├── config/              # Configuration management
+│   ├── http_client/         # HTTP connection pool
+│   ├── log/                 # Logging wrappers
+│   ├── middleware/          # Middleware
+│   └── main.py              # Main application entry
 ├── .env.example             # Environment variable example
 ├── .gitignore               # Git ignore file
-├── CLAUDE.md                # Project documentation (private)
 ├── Dockerfile               # Docker build file
 ├── docker-compose.yml       # Docker Compose configuration
 ├── requirements.txt         # Python dependencies
@@ -1113,23 +1108,23 @@ Project uses the following code standards:
 
 ```bash
 # Format code
-black app/ config/ tests/
+black app/
 
 # Code checking
-flake8 app/ config/ tests/
+flake8 app/
 ```
 
 #### 3. Running Tests
 
 ```bash
 # Run all tests
-pytest tests/ -v
+pytest -v
 
 # Run specific test
-pytest tests/test_main.py::test_root -v
+pytest -k test_root -v
 
 # Generate coverage report
-pytest tests/ --cov=app --cov=config --cov-report=html
+pytest --cov=app --cov-report=html
 ```
 
 #### 4. Development Server
@@ -1156,7 +1151,7 @@ async def custom_endpoint():
 
 #### 2. Modifying Configuration
 
-Add new configuration items in `config/config.py`:
+Add new configuration items in `app/config/config.py`:
 ```python
 # New configuration item
 custom_setting: str = os.getenv('CUSTOM_SETTING', 'default_value')
@@ -1271,26 +1266,13 @@ PROVIDER_1_API_KEY=${SECRET_API_KEY_2}
 
 #### 3. Monitoring and Logging
 
-```python
-# app/main.py - Add logging
-import logging
+The project already includes a unified logging layer. Prefer controlling it with environment variables:
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    
-    logger.info(
-        f"{request.method} {request.url.path} - "
-        f"Status: {response.status_code} - "
-        f"Time: {process_time:.3f}s"
-    )
-    
-    return response
+```bash
+LOG_LEVEL=INFO
+CONSOLE_LOG_ENABLED=true
+AXIOM_ENABLED=false
+# AXIOM_ENDPOINT=https://your-axiom-endpoint
 ```
 
 ---
@@ -1320,7 +1302,17 @@ async def log_requests(request: Request, call_next):
 
 ## 📝 Changelog
 
-### v1.0.1 (Current Version)
+### v1.0.3 (Current Version)
+- ✅ Fixed request-body reuse during upstream retries so requests with bodies retry reliably
+
+### v1.0.2
+- ✅ Automatic `.env` loading for local runs
+- ✅ Separate switches for console logging and Axiom delivery
+- ✅ Background Axiom log queue to avoid blocking request handling
+- ✅ Stricter startup validation for incomplete provider environment variables
+- ✅ Updated docs, examples, and Docker Compose quick start
+
+### v1.0.1
 - ✅ Smart rate limiting based on token bucket algorithm
 - ✅ Burst traffic support with reasonable instantaneous peaks
 - ✅ IP-based request frequency control (full IPv4/IPv6 support)

@@ -31,7 +31,6 @@
   - [Docker Compose 部署](#docker-compose-部署推荐)
 - [配置说明](#配置说明)
   - [环境变量配置](#环境变量配置)
-  - [代码配置](#代码配置)
 - [API 文档](#api-文档)
   - [基础接口](#基础接口)
   - [转发接口](#转发接口)
@@ -64,7 +63,7 @@
 ### 技术特点
 - ⚡ **高性能** - 基于FastAPI和httpx，支持异步并发
 - 🐳 **容器化就绪** - 完整的Docker支持和健康检查
-- 🔧 **灵活配置** - 支持环境变量和代码两种配置方式
+- 🔧 **灵活配置** - 支持 `.env` 文件和系统环境变量
 - 🛡️ **安全可靠** - 可选的API密钥鉴权功能
 - 📊 **监控友好** - 内置状态接口和健康检查
 
@@ -96,13 +95,9 @@ curl http://localhost:8000/
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 配置供应商（二选一）
-# 方式A：环境变量配置
+# 2. 配置环境变量
 cp .env.example .env
 vim .env
-
-# 方式B：代码配置
-vim config/config.py
 
 # 3. 启动服务
 python app/main.py
@@ -158,21 +153,6 @@ PROVIDER_1_API_KEY=your-key-2
 HOST=0.0.0.0
 PORT=8000
 CURRENT_PROVIDER_INDEX=0
-```
-
-**方式B：代码配置**
-编辑 `config/config.py`：
-```python
-DEFAULT_PROVIDERS = [
-    {
-        "base_url": "https://api.anthropic.com",
-        "api_key": "sk-ant-your-key-1"
-    },
-    {
-        "base_url": "https://api.provider2.com", 
-        "api_key": "your-key-2"
-    }
-]
 ```
 
 5. **启动服务**
@@ -237,8 +217,20 @@ CURRENT_PROVIDER_INDEX=0
 REQUEST_TIMEOUT=60
 STREAM_TIMEOUT=120
 
+# 日志配置
+LOG_LEVEL=INFO
+CONSOLE_LOG_ENABLED=true
+AXIOM_ENABLED=false
+AXIOM_ENDPOINT=http://127.0.0.1/
+
 # 鉴权配置（可选）
 AUTH_KEY=your-secret-auth-key
+
+# 限流配置（可选）
+RATE_LIMIT_ENABLED=false
+RATE_LIMIT_RPM=100
+RATE_LIMIT_BURST=10
+RATE_LIMIT_TRUST_PROXY=true
 
 # 供应商配置
 PROVIDER_0_BASE_URL=https://api.anthropic.com
@@ -315,6 +307,14 @@ docker-compose -f docker-compose.prod.yml up -d
 | `REQUEST_TIMEOUT` | `60` | 普通请求超时（秒） |
 | `STREAM_TIMEOUT` | `120` | 流式请求超时（秒） |
 
+#### 日志配置
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `LOG_LEVEL` | `INFO` | 日志级别，支持 `DEBUG/INFO/WARNING/ERROR/CRITICAL` |
+| `CONSOLE_LOG_ENABLED` | `true` | 是否输出控制台日志 |
+| `AXIOM_ENABLED` | `false` | 是否启用 Axiom 日志上报 |
+| `AXIOM_ENDPOINT` | `http://127.0.0.1/` | Axiom 日志接收端点 |
+
 #### 鉴权配置
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
@@ -350,35 +350,15 @@ PROVIDER_2_API_KEY=your-key-3a,your-key-3b
 **注意事项：**
 - 索引必须从 0 开始且连续，不能有间断
 - 每个供应商都需要同时配置 `BASE_URL` 和 `API_KEY`
-- 如果某个索引缺失，后续的供应商将被忽略
-
-### 代码配置
-
-如果不使用环境变量，可以直接修改 `config/config.py` 文件：
-
-```python
-# config/config.py
-DEFAULT_PROVIDERS = [
-    {
-        "base_url": "https://api.anthropic.com",
-        "api_key": "sk-ant-your-key-1"  # 在这里填入你的 API Key
-    },
-    {
-        "base_url": "https://api.provider2.com", 
-        "api_key": "your-key-2"  # 第二个供应商的 API Key
-    },
-    {
-        "base_url": "https://api.provider3.com",
-        "api_key": "your-key-3"  # 第三个供应商的 API Key
-    }
-]
-```
+- `PROVIDER_N_BASE_URL` 和 `PROVIDER_N_API_KEY` 必须成对出现，否则启动时报错
+- 本地运行会自动加载当前目录下的 `.env` 文件
 
 ### 配置优先级
 
 配置加载优先级如下：
-1. **环境变量** - 最高优先级
-2. **代码配置** - 当环境变量不存在时使用
+1. **系统环境变量**
+2. **当前目录 `.env` 文件**
+3. **代码中的默认值**
 
 ---
 
@@ -395,13 +375,17 @@ GET /
 **响应示例：**
 ```json
 {
-  "app": "CIL Router",
-  "version": "1.0.1",
-  "current_provider_index": 0,
-  "total_providers": 3,
-  "current_provider_endpoints": 1,
-  "current_provider_urls": ["https://api.anthropic.com"],
-  "load_balancing": "round_robin"
+  "应用名称": "CIL Router",
+  "当前版本": "1.0.3",
+  "当前供应商": 0,
+  "全部供应商信息": [
+    {
+      "供应商索引": 0,
+      "供应商端点数目": 1,
+      "供应商端点": ["https://api.anthropic.com"]
+    }
+  ],
+  "跟踪ID": "2T8H9x..."
 }
 ```
 
@@ -420,20 +404,24 @@ Content-Type: text/plain
 **成功响应：**
 ```json
 {
-  "success": true,
-  "message": "已切换到供应商 1",
-  "current_index": 1,
-  "total_providers": 3
+  "状态": "成功",
+  "信息": "已切换到供应商 1",
+  "供应商信息": {
+    "供应商索引": 1,
+    "供应商端点数目": 1,
+    "供应商端点": ["https://api.provider2.com"]
+  },
+  "跟踪ID": "2T8H9x..."
 }
 ```
 
 **错误响应：**
 ```json
 {
-  "success": false,
-  "message": "无效的供应商索引: 5. 有效范围: 0-2",
-  "current_index": 0,
-  "total_providers": 3
+  "detail": {
+    "信息": "无效的供应商索引 5",
+    "跟踪ID": "2T8H9x..."
+  }
 }
 ```
 
@@ -773,11 +761,17 @@ curl http://localhost:8000/
 
 # 响应示例
 {
-  "app": "CIL Router",
-  "version": "1.0.0", 
-  "current_provider_index": 0,
-  "total_providers": 2,
-  "current_provider_url": "https://api.anthropic.com"
+  "应用名称": "CIL Router",
+  "当前版本": "1.0.3",
+  "当前供应商": 0,
+  "全部供应商信息": [
+    {
+      "供应商索引": 0,
+      "供应商端点数目": 1,
+      "供应商端点": ["https://api.anthropic.com"]
+    }
+  ],
+  "跟踪ID": "2T8H9x..."
 }
 ```
 
@@ -900,7 +894,7 @@ Error: Could not find config.config module
 确保项目结构完整，包含所有必要文件：
 ```bash
 # 检查项目结构
-ls -la app/ config/
+ls -la app/ app/config/
 
 # 重新构建镜像
 docker build --no-cache -t cilrouter .
@@ -913,8 +907,17 @@ docker build --no-cache -t cilrouter .
 ```bash
 # 设置日志级别
 export LOG_LEVEL=DEBUG
+export CONSOLE_LOG_ENABLED=true
 
 # 启动服务
+python app/main.py
+```
+
+如果需要把日志同时发到 Axiom：
+
+```bash
+export AXIOM_ENABLED=true
+export AXIOM_ENDPOINT=https://your-axiom-endpoint
 python app/main.py
 ```
 
@@ -943,13 +946,12 @@ curl -v -X POST http://localhost:8000/v1/messages \
 
 ### 性能优化
 
-#### 1. 连接池优化
+#### 1. 上游端点优化
 
-修改 `config/config.py` 添加连接池配置：
-```python
-# 连接池配置
-CONNECTION_POOL_SIZE = 100
-CONNECTION_POOL_MAX_SIZE = 1000
+优先为同一供应商配置多个可用端点，系统会自动轮询并在失败时重试：
+```bash
+PROVIDER_0_BASE_URL=https://api-1.example.com,https://api-2.example.com
+PROVIDER_0_API_KEY=key-1,key-2
 ```
 
 #### 2. 超时优化
@@ -990,18 +992,13 @@ services:
 ```
 CILRouter/
 ├── app/
-│   ├── __init__.py
-│   └── main.py              # 主应用文件（FastAPI应用）
-├── config/
-│   ├── __init__.py
-│   └── config.py            # 配置管理模块
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py          # pytest 配置
-│   └── test_main.py         # 单元测试
+│   ├── config/              # 配置管理
+│   ├── http_client/         # HTTP 连接池
+│   ├── log/                 # 日志封装
+│   ├── middleware/          # 中间件
+│   └── main.py              # 主应用入口
 ├── .env.example             # 环境变量示例
 ├── .gitignore               # Git忽略文件
-├── CLAUDE.md                # 项目文档（私有）
 ├── Dockerfile               # Docker构建文件
 ├── docker-compose.yml       # Docker Compose配置
 ├── requirements.txt         # Python依赖
@@ -1039,23 +1036,23 @@ vim .env
 
 ```bash
 # 格式化代码
-black app/ config/ tests/
+black app/
 
 # 代码检查
-flake8 app/ config/ tests/
+flake8 app/
 ```
 
 #### 3. 运行测试
 
 ```bash
 # 运行所有测试
-pytest tests/ -v
+pytest -v
 
 # 运行特定测试
-pytest tests/test_main.py::test_root -v
+pytest -k test_root -v
 
 # 生成覆盖率报告
-pytest tests/ --cov=app --cov=config --cov-report=html
+pytest --cov=app --cov-report=html
 ```
 
 #### 4. 开发服务器
@@ -1082,7 +1079,7 @@ async def custom_endpoint():
 
 #### 2. 修改配置
 
-在 `config/config.py` 中添加新的配置项：
+在 `app/config/config.py` 中添加新的配置项：
 ```python
 # 新配置项
 custom_setting: str = os.getenv('CUSTOM_SETTING', 'default_value')
@@ -1197,26 +1194,13 @@ PROVIDER_1_API_KEY=${SECRET_API_KEY_2}
 
 #### 3. 监控和日志
 
-```python
-# app/main.py - 添加日志记录
-import logging
+项目已经内置统一日志出口，推荐直接通过环境变量控制：
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    process_time = time.time() - start_time
-    
-    logger.info(
-        f"{request.method} {request.url.path} - "
-        f"Status: {response.status_code} - "
-        f"Time: {process_time:.3f}s"
-    )
-    
-    return response
+```bash
+LOG_LEVEL=INFO
+CONSOLE_LOG_ENABLED=true
+AXIOM_ENABLED=false
+# AXIOM_ENDPOINT=https://your-axiom-endpoint
 ```
 
 ---
@@ -1246,7 +1230,17 @@ async def log_requests(request: Request, call_next):
 
 ## 📝 更新日志
 
-### v1.0.1 (当前版本)
+### v1.0.3 (当前版本)
+- ✅ 修复上游重试时复用已消费请求体的问题，带 body 的请求重试更可靠
+
+### v1.0.2
+- ✅ 本地运行自动加载 `.env`
+- ✅ 控制台日志和 Axiom 日志可分别开关
+- ✅ Axiom 日志改为后台队列发送，避免阻塞请求处理
+- ✅ 配置校验更严格，供应商环境变量缺失时启动即报错
+- ✅ 文档、示例和 Docker Compose 启动方式已同步更新
+
+### v1.0.1
 - ✅ 基于令牌桶算法的智能限流
 - ✅ 支持突发流量处理，允许合理的瞬时高峰
 - ✅ 基于IP的请求频率控制（完整支持IPv4/IPv6）
