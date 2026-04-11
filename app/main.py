@@ -216,8 +216,8 @@ async def forward_request(path: str, request: Request):
     logger.info(f"IP:{IP}访问端点 /{path}", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path}")
     try:
         # 鉴权检查
-        auth_key = (config.get_request_config()["AUTH_KEY"]).strip()
-        if auth_key:
+        auth_keys = config.get_request_config()["AUTH_KEYS"]
+        if auth_keys:
             auth_header = (request.headers.get('authorization', '')).strip()
             if not auth_header.lower().startswith('bearer '):
                 logger.warning(
@@ -227,7 +227,7 @@ async def forward_request(path: str, request: Request):
                     信息=f"访问端点 /{path} 鉴权失败: 缺少Bearer令牌",
                 )
                 raise HTTPException(status_code=401, detail={"信息":"缺少鉴权令牌","跟踪ID": trace_id})
-            if auth_header[7:] != auth_key:
+            if auth_header[7:].strip() not in auth_keys:
                 logger.warning(
                     f"❌IP:{IP}访问端点 /{path}➡️鉴权失败: 令牌无效",
                     IP=IP,

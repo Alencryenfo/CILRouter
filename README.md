@@ -193,6 +193,7 @@ CURRENT_PROVIDER_INDEX=0
 ### 关于 `AUTH_KEY`
 
 `AUTH_KEY` 保护的是“客户端访问路由器”这一步，不是上游供应商。
+它支持单个 token，也支持逗号分隔的多个 token。
 
 当前实现中，`AUTH_KEY` 只会应用在通用转发接口上，不会拦截：
 
@@ -202,7 +203,7 @@ CURRENT_PROVIDER_INDEX=0
 启用后，客户端必须带：
 
 ```http
-Authorization: Bearer <AUTH_KEY>
+Authorization: Bearer <AUTH_KEY 中任意一个 token>
 ```
 
 然后路由器会在转发时把这个头替换成当前供应商的真实 API Key。
@@ -212,6 +213,7 @@ Authorization: Bearer <AUTH_KEY>
 - 客户端不需要知道供应商真实 Key
 - 客户端传给路由器的 `Authorization` 不会原样透传到上游
 - 如果你希望零鉴权内网使用，可以不设置 `AUTH_KEY`
+- 如果你配置多个 token，可以用英文逗号分隔，例如 `AUTH_KEY=token-a,token-b`
 - 如果你把服务暴露到公网，建议在反向代理层额外限制 `/select`
 
 ## API

@@ -18,6 +18,11 @@ except ImportError:  # pragma: no cover - 兼容未安装开发依赖的场景
 load_dotenv()
 
 
+def _parse_csv_env(value: str) -> List[str]:
+    """将逗号分隔的环境变量解析为去空白后的列表。"""
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
 def load_providers_from_env() -> List[Dict[str, List[str]]]:
     """
     从环境变量加载供应商配置
@@ -39,8 +44,8 @@ def load_providers_from_env() -> List[Dict[str, List[str]]]:
                 f"API_KEY={'已设置' if api_keys_str else '未设置'}"
             )
         if base_urls_str and api_keys_str:
-            base_urls = [url.strip() for url in base_urls_str.split(',') if url.strip()]
-            api_keys = [key.strip() for key in api_keys_str.split(',') if key.strip()]
+            base_urls = _parse_csv_env(base_urls_str)
+            api_keys = _parse_csv_env(api_keys_str)
             if len(base_urls) != len(api_keys):
                 raise ValueError(
                     f"PROVIDER_{index}_BASE_URL 和 PROVIDER_{index}_API_KEY 数量不一致: "
@@ -92,6 +97,7 @@ CURRENT_PROVIDER_INDEX: int = _load_provider_index()
 
 # 请求配置
 AUTH_KEY: str = os.getenv('AUTH_KEY', '').strip()
+AUTH_KEYS: List[str] = _parse_csv_env(AUTH_KEY)
 REQUEST_TIMEOUT: float = float(os.getenv('REQUEST_TIMEOUT', '60'))
 STREAM_TIMEOUT: float = float(os.getenv('STREAM_TIMEOUT', '120'))
 
@@ -209,6 +215,7 @@ def get_request_config() -> Dict[str, Any]:
     """获取请求配置"""
     return {
         "AUTH_KEY": AUTH_KEY,
+        "AUTH_KEYS": AUTH_KEYS,
         "REQUEST_TIMEOUT": REQUEST_TIMEOUT,
         "STREAM_TIMEOUT": STREAM_TIMEOUT
     }
@@ -226,7 +233,7 @@ def get_rate_limit_config() -> Dict[str, Any]:
 
 def reload_config():
     """重新加载配置（主要用于运行时更新环境变量）"""
-    global CNT,PROVIDERS, CURRENT_PROVIDER_INDEX, REQUEST_TIMEOUT, STREAM_TIMEOUT, HOST, PORT, AUTH_KEY, RATE_LIMIT_ENABLED, \
+    global CNT,PROVIDERS, CURRENT_PROVIDER_INDEX, REQUEST_TIMEOUT, STREAM_TIMEOUT, HOST, PORT, AUTH_KEY, AUTH_KEYS, RATE_LIMIT_ENABLED, \
         RATE_LIMIT_RPM, RATE_LIMIT_BURST_SIZE, RATE_LIMIT_TRUST_PROXY,LOG_LEVEL, CONSOLE_LOG_ENABLED, AXIOM_ENABLED, AXIOM_ENDPOINT, \
         AXIOM_DOMAIN, AXIOM_DATASET, AXIOM_API_TOKEN, AXIOM_EVENT_LABELS, AXIOM_TIMESTAMP_FIELD, AXIOM_TIMESTAMP_FORMAT, \
         AXIOM_REQUEST_TIMEOUT, AXIOM_RETRY_MAX_ATTEMPTS, AXIOM_RETRY_BASE_DELAY, AXIOM_RETRY_MAX_DELAY
@@ -259,6 +266,7 @@ def reload_config():
 
     # 请求配置
     AUTH_KEY = os.getenv('AUTH_KEY', '').strip()
+    AUTH_KEYS = _parse_csv_env(AUTH_KEY)
     REQUEST_TIMEOUT= float(os.getenv('REQUEST_TIMEOUT', '60'))
     STREAM_TIMEOUT = float(os.getenv('STREAM_TIMEOUT', '120'))
 

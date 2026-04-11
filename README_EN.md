@@ -193,6 +193,7 @@ This means:
 ### About `AUTH_KEY`
 
 `AUTH_KEY` protects access to the router itself, not the upstream provider.
+It supports either a single token or multiple comma-separated tokens.
 
 In the current implementation, `AUTH_KEY` is only enforced on the generic forwarding route. It does not protect:
 
@@ -202,7 +203,7 @@ In the current implementation, `AUTH_KEY` is only enforced on the generic forwar
 When enabled, clients must send:
 
 ```http
-Authorization: Bearer <AUTH_KEY>
+Authorization: Bearer <any token from AUTH_KEY>
 ```
 
 The router then replaces that header with the real provider API key before forwarding upstream.
@@ -212,6 +213,7 @@ In practice:
 - clients do not need to know the real upstream key
 - the client `Authorization` header is never passed upstream unchanged
 - you can leave `AUTH_KEY` unset for trusted internal use
+- if you want multiple valid tokens, separate them with commas, for example `AUTH_KEY=token-a,token-b`
 - if you expose this service publicly, you should restrict `/select` at the reverse-proxy layer
 
 ## API
