@@ -1,0 +1,58 @@
+# CILRouter 配置文件
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+# 访问令牌列表（为空则不鉴权）
+auth:
+  keys: []
+  # keys:
+  #   - "your-secret-token-1"
+  #   - "your-secret-token-2"
+
+# 启动时默认使用的供应商索引（0 = 第一个）
+current_provider: 0
+
+# 供应商列表，支持多个供应商，每个供应商支持多个端点（轮询）
+providers:
+  - endpoints:
+      - base_url: "https://api.anthropic.com"
+        api_key: "sk-ant-xxx"
+      # 同一供应商多个端点会轮询
+      # - base_url: "https://api2.example.com"
+      #   api_key: "sk-xxx"
+  # - endpoints:
+  #     - base_url: "https://api.openai.com"
+  #       api_key: "sk-openai-xxx"
+
+# 请求超时（秒）
+request:
+  timeout: 60
+  stream_timeout: 120
+
+# 限流配置
+rate_limit:
+  enabled: false
+  rpm: 100          # 每分钟最大请求数
+  burst: 10         # 突发容量
+  trust_proxy: true # 是否信任 X-Forwarded-For 等代理头
+
+# 日志配置
+logging:
+  level: INFO       # DEBUG / INFO / WARNING / ERROR
+  console: true
+  axiom:
+    enabled: false
+    endpoint: ""    # 直接指定完整 ingest URL（优先）
+    domain: ""      # 或通过 domain + dataset 自动构造端点
+    dataset: ""
+    api_token: ""
+    event_labels: ""
+    timestamp_field: ""
+    timestamp_format: ""
+    request_timeout: 2.0
+    retry:
+      max_attempts: 5
+      base_delay: 1.0
+      max_delay: 30.0

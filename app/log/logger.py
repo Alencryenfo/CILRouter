@@ -1,22 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-CIL Router 日志配置模块
-提供统一的日志管理功能
+统一日志出口。
 """
 
 import logging
-import sys
 import secrets
+import sys
 from typing import Any
 
 from app.config import config
 from .axiom import axiom_log
 
+LOGGER_NAME = "CILRouter"
+TRACE_ID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
 
 class RouterLogger:
     """统一日志出口，同时支持控制台和 Axiom。"""
 
-    _LOGGING_KWARGS = {"exc_info", "stack_info", "stacklevel", "extra"}
+    _LOGGING_KWARGS = frozenset({"exc_info", "stack_info", "stacklevel", "extra"})
 
     def __init__(self, logger: logging.Logger):
         self._logger = logger
@@ -27,14 +29,14 @@ class RouterLogger:
     def _ensure_console_handler(self) -> None:
         if self._logger.handlers:
             return
-        console_formatter = logging.Formatter(
+        formatter = logging.Formatter(
             '[%(levelname)s][%(asctime)sZ|%(pathname)s:%(lineno)d]%(message)s',
-            datefmt='%Y-%m-%dT%H:%M:%S'
+            datefmt="%Y-%m-%dT%H:%M:%S",
         )
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.DEBUG)
-        console_handler.setFormatter(console_formatter)
-        self._logger.addHandler(console_handler)
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(formatter)
+        self._logger.addHandler(handler)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._logger, name)
@@ -99,63 +101,23 @@ class RouterLogger:
         kwargs.setdefault("exc_info", True)
         self._log(logging.ERROR, msg, *args, **kwargs)
 
-def setup_logger(
-    log_level: str,
-) -> RouterLogger:
-    """
-    设置日志配置
-    
-    Args:
-        log_level: 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    
-    Returns:
-        配置好的日志器
-    """
-    
-    # 创建日志器
-    logger = logging.getLogger("CILRouter")
-    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-    
-    # 清除已有的处理器，避免重复
+
+def setup_logger() -> RouterLogger:
+    logger = logging.getLogger(LOGGER_NAME)
     logger.handlers.clear()
     logger.propagate = False
-    
     return RouterLogger(logger)
 
-_default_logger = None
+
+_default_logger: RouterLogger | None = None
+
 
 def get_logger() -> RouterLogger:
-    """
-    获取默认日志器，如果未设置则使用默认配置
-
-    Returns:
-        日志器实例
-    """
     global _default_logger
     if _default_logger is None:
-        _default_logger = setup_logger(config.get_log_level())
+        _default_logger = setup_logger()
     return _default_logger
 
-def get_trace_id()-> str:
-    ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    return ''.join(secrets.choice(ALPHABET) for _ in range(20))
 
-# 便捷的日志函数
-def debug(msg, *args, **kwargs):
-    """记录DEBUG级别日志"""
-    get_logger().debug(msg, *args, **kwargs)
-
-
-def info(msg, *args, **kwargs):
-    """记录INFO级别日志"""
-    get_logger().info(msg, *args, **kwargs)
-
-
-def warning(msg, *args, **kwargs):
-    """记录WARNING级别日志"""
-    get_logger().warning(msg, *args, **kwargs)
-
-
-def error(msg, *args, **kwargs):
-    """记录ERROR级别日志"""
-    get_logger().error(msg, *args, **kwargs)
+def get_trace_id() -> str:
+    return "".join(secrets.choice(TRACE_ID_ALPHABET) for _ in range(20))

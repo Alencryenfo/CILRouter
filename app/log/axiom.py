@@ -1,10 +1,11 @@
 import httpx
-import sys
-import os
 import atexit
+import os
 import queue
+import sys
 import threading
 from typing import Any
+
 from app.config import config
 
 _AXIOM_QUEUE: "queue.Queue[dict[str, Any] | None]" = queue.Queue(maxsize=1000)
@@ -126,15 +127,9 @@ def _shutdown_axiom_worker() -> None:
 
 atexit.register(_shutdown_axiom_worker)
 
-def _caller_info(stacklevel) -> dict:
-    """
-    返回调用方信息。stacklevel=1 指 axiom_log 的直接调用者；
-    若你外面再包一层函数/装饰器，把 stacklevel 调高（例如 2/3）。
-    """
-    # 用 _getframe 比 inspect.stack() 轻很多
-    f = sys._getframe(stacklevel)  # 0:_context_info 1:axiom_log 2:你的调用点
+def _caller_info(stacklevel: int) -> dict[str, Any]:
+    f = sys._getframe(stacklevel)
     return {
-        # 代码位置信息
         "模块名": f.f_globals.get("__name__", ""),
         "文件路径": f.f_code.co_filename,
         "文件名": os.path.basename(f.f_code.co_filename),
@@ -148,10 +143,6 @@ def _caller_info(stacklevel) -> dict:
 
 
 def axiom_log(level: str, stacklevel: int = 2, **fields) -> None:
-    """
-    用法: axiom_log("DEBUG", message="dddd", ddd=45)
-    会发送 JSON 数组: [{"timestamp": "...", "level": "DEBUG", "message": "dddd", "ddd": 45}]
-    """
     if not config.is_axiom_enabled():
         return
     endpoint = config.get_axiom_endpoint()
@@ -164,7 +155,7 @@ def axiom_log(level: str, stacklevel: int = 2, **fields) -> None:
             "Axiom日志未配置端点，请设置 AXIOM_ENDPOINT，或同时设置 AXIOM_DOMAIN 与 AXIOM_DATASET"
         )
         return
-    if 'Authorization' not in headers and not config.AXIOM_ENDPOINT:
+    if "Authorization" not in headers:
         _report_axiom_failure(
             "Axiom日志未配置 AXIOM_API_TOKEN，本条日志已跳过"
         )
@@ -172,8 +163,8 @@ def axiom_log(level: str, stacklevel: int = 2, **fields) -> None:
 
     event = {
         "level": level,
-        **fields,  # 你的任意键值对都直接并入
-        "位置信息":_caller_info(stacklevel),
+        **fields,
+        "位置信息": _caller_info(stacklevel),
     }
     try:
         _enqueue_axiom_item({

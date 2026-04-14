@@ -24,6 +24,7 @@ RUN python -m pip install -r requirements-prod.txt
 
 # 复制应用代码
 COPY --chown=cilrouter:cilrouter app/ ./app/
+COPY --chown=cilrouter:cilrouter config.yaml ./config.yaml
 
 # 创建必要的目录
 RUN install -d -o cilrouter -g cilrouter /app/logs

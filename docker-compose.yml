@@ -2,10 +2,11 @@ services:
   cilrouter:
     build: .
     container_name: cilrouter
-    env_file:
-      - .env
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ./config.yaml:/app/config.yaml
     ports:
-      - "${PORT:-8000}:8000"
+      - "8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/', timeout=5)"]
       interval: 30s
