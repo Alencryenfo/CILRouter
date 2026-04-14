@@ -2,9 +2,8 @@ services:
   cilrouter:
     build: .
     container_name: cilrouter
-    user: "${UID:-1000}:${GID:-1000}"
     volumes:
-      - ./config.yaml:/app/config.yaml
+      - ./config.yaml:/app/config.yaml:ro
     ports:
       - "8000:8000"
     healthcheck:

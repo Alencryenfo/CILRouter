@@ -22,7 +22,6 @@ get_server_config = config.get_server_config
 get_request_config = config.get_request_config
 get_rate_limit_config = config.get_rate_limit_config
 reload_config = config.reload_config
-reload_config_if_changed = config.reload_config_if_changed
 
 
 def __getattr__(name: str):
@@ -53,5 +52,4 @@ __all__ = [
     "get_request_config",
     "get_rate_limit_config",
     "reload_config",
-    "reload_config_if_changed",
 ]

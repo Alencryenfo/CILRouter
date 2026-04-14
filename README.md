@@ -29,8 +29,6 @@ CIL Router 适合这类场景：
 - 支持流式响应透传
 - 支持同一供应商下多个端点轮询
 - 支持 `POST /select` 手动切换当前供应商
-- 支持 `config.yaml` 热重载
-- `POST /select` 切换供应商时会同步写回 `config.yaml`
 - 支持基于 IP 的令牌桶限流
 - 支持 Cloudflare / 反向代理场景下识别真实客户端 IP
 - 支持控制台日志和 Axiom 日志上报
@@ -125,9 +123,8 @@ curl http://localhost:8000/
 说明：
 
 - `docker-compose.yml` 默认把本地 `config.yaml` 挂载到容器内 `/app/config.yaml`
-- `docker-compose.yml` 默认使用 `user: "${UID:-1000}:${GID:-1000}"` 运行，尽量让容器内进程与宿主机文件权限保持一致
-- 这个挂载是可写的，因为 `POST /select` 需要把新的 `current_provider` 同步写回文件
-- 直接编辑宿主机上的 `config.yaml` 后，服务会自动热重载
+- 这个挂载是只读的，服务启动时读取一次配置
+- 修改 `config.yaml` 后需要重启服务才会生效
 
 ### 方式二：本地运行
 
@@ -212,23 +209,15 @@ logging:
 - `rate_limit.*`：限流配置
 - `logging.*`：控制台日志和 Axiom 上报配置
 
-### 热重载行为
-
-服务启动后会持续监测 `config.yaml`：
-
-- 你手动编辑并保存 `config.yaml` 后，服务会自动重新加载配置
-- `current_provider`、日志级别、鉴权、超时、限流配置都会按新配置生效
-- 如果 `config.yaml` 内容非法，服务会保留当前已生效配置，并记录错误日志
-
-### `POST /select` 与配置文件同步
+### `POST /select` 行为
 
 调用 `POST /select` 时：
 
 - 运行中的当前供应商会立即切换
-- `config.yaml` 里的 `current_provider` 会同步更新
-- 服务重启后仍会使用新的供应商索引
+- 切换结果只保留在当前进程内存中
+- 服务重启后会重新使用 `config.yaml` 里的 `current_provider`
 
-这也是为什么 Docker Compose 里的 `config.yaml` 挂载必须是可写的。
+如果你希望切换结果长期生效，请手动修改 `config.yaml` 后重启服务。
 
 ## 关于鉴权
 

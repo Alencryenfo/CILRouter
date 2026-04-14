@@ -4,7 +4,6 @@ CIL Router 配置模块
 从固定路径 config.yaml（项目根目录）加载配置
 """
 
-import re
 from pathlib import Path
 from threading import RLock
 from typing import List, Dict, Any
@@ -63,36 +62,12 @@ CNT: int = -1
 CURRENT_PROVIDER_INDEX: int = 0
 PROVIDERS: List[Dict[str, List[str]]] = []
 _config_lock = RLock()
-_config_mtime_ns: int | None = None
 
 # ---- Axiom 直接端点（供 axiom.py 直接访问）----
 AXIOM_ENDPOINT: str = ""
 
 # ---- 内部配置快照 ----
 _cfg: dict = {}
-
-
-def _read_config_mtime_ns() -> int | None:
-    try:
-        return CONFIG_PATH.stat().st_mtime_ns
-    except FileNotFoundError:
-        return None
-
-
-def _replace_current_provider(text: str, index: int) -> str:
-    pattern = re.compile(r"(?m)^(\s*current_provider\s*:\s*)[^#\n]*(\s*(?:#.*)?)$")
-    if pattern.search(text):
-        return pattern.sub(rf"\g<1>{index}\g<2>", text, count=1)
-
-    suffix = "" if not text or text.endswith("\n") else "\n"
-    return f"{text}{suffix}current_provider: {index}\n"
-
-
-def _sync_current_provider_to_file(index: int) -> None:
-    text = CONFIG_PATH.read_text(encoding="utf-8")
-    updated = _replace_current_provider(text, index)
-    if updated != text:
-        CONFIG_PATH.write_text(updated, encoding="utf-8")
 
 
 def _apply(cfg: dict) -> None:
@@ -111,7 +86,6 @@ def _apply(cfg: dict) -> None:
 # 启动时加载
 _cfg = _load_yaml()
 _apply(_cfg)
-_config_mtime_ns = _read_config_mtime_ns()
 
 
 # ---- 服务器 ----
@@ -276,39 +250,19 @@ def get_current_provider_endpoint() -> Dict[str, str]:
 
 
 def set_provider_index(index: int) -> bool:
-    global CURRENT_PROVIDER_INDEX, CNT, _config_mtime_ns
+    global CURRENT_PROVIDER_INDEX, CNT
     with _config_lock:
         if 0 <= index < len(PROVIDERS):
-            _sync_current_provider_to_file(index)
             _cfg["current_provider"] = index
             CURRENT_PROVIDER_INDEX = index
             CNT = -1
-            _config_mtime_ns = _read_config_mtime_ns()
             return True
         return False
 
 
-# ---- 热重载 ----
-
 def reload_config() -> None:
-    """重新从 config.yaml 加载配置（运行时状态 CNT/CURRENT_PROVIDER_INDEX 会重置）。"""
-    global _cfg, _config_mtime_ns
+    """重新从 config.yaml 加载配置。"""
+    global _cfg
     with _config_lock:
         _cfg = _load_yaml()
         _apply(_cfg)
-        _config_mtime_ns = _read_config_mtime_ns()
-
-
-def reload_config_if_changed() -> bool:
-    """配置文件发生变化时重载配置；无变化时返回 False。"""
-    global _cfg, _config_mtime_ns
-    with _config_lock:
-        latest_mtime = _read_config_mtime_ns()
-        if latest_mtime is None:
-            raise FileNotFoundError(f"配置文件不存在: {CONFIG_PATH}")
-        if _config_mtime_ns == latest_mtime:
-            return False
-        _cfg = _load_yaml()
-        _apply(_cfg)
-        _config_mtime_ns = latest_mtime
-        return True

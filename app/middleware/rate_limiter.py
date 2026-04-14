@@ -19,6 +19,7 @@ from app.log import get_logger, get_trace_id
 
 logger = get_logger()
 LOCALHOST_IPS = {"127.0.0.1", "::1"}
+_active_middleware: "RateLimitMiddleware | None" = None
 
 
 @dataclass
@@ -131,11 +132,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, rate_limiter: RateLimiter | None, enabled: bool = True, trust_proxy: bool = True):
         super().__init__(app)
+        global _active_middleware
         self.rate_limiter = rate_limiter
         self.enabled = enabled
         self.trust_proxy = trust_proxy
         self._runtime_lock = asyncio.Lock()
         self._config_signature: tuple[bool, int, int, bool] | None = None
+        _active_middleware = self
 
     async def _sync_runtime_config(self) -> None:
         rate_limit_config = config.get_rate_limit_config()
@@ -243,3 +246,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+    async def close(self) -> None:
+        if self.rate_limiter is not None:
+            await self.rate_limiter.close()
+
+
+async def close_rate_limit_middleware() -> None:
+    global _active_middleware
+    if _active_middleware is None:
+        return
+    await _active_middleware.close()

@@ -29,8 +29,6 @@ It is not an SDK and not a full gateway. It is a small proxy layer focused on tr
 - Streaming response passthrough
 - Round-robin selection across multiple endpoints inside one provider group
 - Manual provider-group switching via `POST /select`
-- `config.yaml` hot reload
-- `POST /select` persists the new provider index back into `config.yaml`
 - IP-based token-bucket rate limiting
 - Real client IP detection behind Cloudflare or reverse proxies
 - Console logging and optional Axiom log delivery
@@ -125,9 +123,8 @@ curl http://localhost:8000/
 Notes:
 
 - `docker-compose.yml` mounts your local `config.yaml` into `/app/config.yaml`
-- `docker-compose.yml` runs as `user: "${UID:-1000}:${GID:-1000}"` by default to better match host file permissions
-- The mount must stay writable because `POST /select` writes the new `current_provider` back to the file
-- Editing `config.yaml` on the host triggers automatic in-process hot reload
+- The mount is read-only and loaded at startup
+- After editing `config.yaml`, restart the service to apply changes
 
 ### Option 2: Local Run
 
@@ -206,23 +203,15 @@ Main fields:
 - `rate_limit.*`: rate-limit settings
 - `logging.*`: console and Axiom logging settings
 
-### Hot Reload Behavior
-
-After startup, the service continuously watches `config.yaml`:
-
-- Manual edits to `config.yaml` are reloaded automatically
-- `current_provider`, logging level, auth, timeouts, and rate limiting all follow the updated config
-- If the file becomes invalid, the service keeps the last valid in-memory config and logs the reload error
-
-### `POST /select` Persistence
+### `POST /select` Behavior
 
 When you call `POST /select`:
 
 - The running provider group switches immediately
-- `current_provider` in `config.yaml` is updated at the same time
-- The new provider index survives restarts
+- The change stays only in process memory
+- After a restart, the service uses `current_provider` from `config.yaml` again
 
-That is why the Docker Compose bind mount must remain writable.
+If you want the change to persist, edit `config.yaml` manually and restart the service.
 
 ## Authentication
 

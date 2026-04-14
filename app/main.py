@@ -3,7 +3,6 @@
 CIL Router - 应用入口，只负责装配。
 """
 
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -12,11 +11,10 @@ from app.config import config
 from app.constants import APP_VERSION
 from app.http_client.http_pool import close_all_clients, ensure_http2_support
 from app.log.logger import get_logger
-from app.middleware.rate_limiter import RateLimitMiddleware, RateLimiter
+from app.middleware.rate_limiter import RateLimitMiddleware, RateLimiter, close_rate_limit_middleware
 from app.routes import router
 
 logger = get_logger()
-CONFIG_RELOAD_INTERVAL_SECONDS = 1.0
 
 rate_limit_config = config.get_rate_limit_config()
 RATE_LIMIT_ENABLED = rate_limit_config["RATE_LIMIT_ENABLED"]
@@ -26,37 +24,15 @@ rl = RateLimiter(
 ) if RATE_LIMIT_ENABLED else None
 
 
-async def _config_reload_loop():
-    while True:
-        await asyncio.sleep(CONFIG_RELOAD_INTERVAL_SECONDS)
-        try:
-            if config.reload_config_if_changed():
-                logger.info("♻️ 检测到 config.yaml 变更，已完成热重载", 信息="config.yaml 已热重载")
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(
-                f"❌ config.yaml 热重载失败: {type(e).__name__}: {e}",
-                信息=f"config.yaml 热重载失败: {type(e).__name__}: {e}",
-            )
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    config_reload_task = asyncio.create_task(_config_reload_loop())
     try:
         ensure_http2_support()
         if rl:
             await rl.start()
         yield
     finally:
-        config_reload_task.cancel()
-        try:
-            await config_reload_task
-        except asyncio.CancelledError:
-            pass
-        if rl:
-            await rl.close()
+        await close_rate_limit_middleware()
         await close_all_clients()
 
 

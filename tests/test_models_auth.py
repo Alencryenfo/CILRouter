@@ -1,6 +1,7 @@
 import importlib
 
 import pytest
+import httpx
 from fastapi.responses import Response
 from fastapi.testclient import TestClient
 
@@ -170,10 +171,9 @@ providers:
 
     assert config.set_provider_index(1) is True
     assert config.CURRENT_PROVIDER_INDEX == 1
-    assert "current_provider: 1" in config_file.read_text(encoding="utf-8")
+    assert "current_provider: 1" not in config_file.read_text(encoding="utf-8")
 
-
-def test_reload_config_if_changed_applies_external_updates(tmp_path, monkeypatch):
+def test_reload_config_applies_external_updates(tmp_path, monkeypatch):
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         """
@@ -224,7 +224,7 @@ logging:
         encoding="utf-8",
     )
 
-    assert config.reload_config_if_changed() is True
+    config.reload_config()
     assert config.CURRENT_PROVIDER_INDEX == 1
     assert config.get_server_config()["PORT"] == 9000
     assert config.get_log_level() == "DEBUG"
@@ -266,3 +266,47 @@ def test_http_pool_requires_h2_dependency(monkeypatch):
 
     with pytest.raises(RuntimeError, match="缺少 h2 依赖"):
         http_pool.ensure_http2_support()
+
+
+def test_proxy_preserves_duplicate_response_headers():
+    from app.routes.proxy import _strip_hop_headers
+
+    headers = httpx.Headers(
+        [
+            (b"set-cookie", b"a=1"),
+            (b"set-cookie", b"b=2"),
+            (b"content-type", b"text/plain"),
+            (b"connection", b"close"),
+        ]
+    )
+
+    assert _strip_hop_headers(headers) == [
+        (b"set-cookie", b"a=1"),
+        (b"set-cookie", b"b=2"),
+        (b"content-type", b"text/plain"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_close_rate_limit_middleware_closes_current_runtime_limiter():
+    import app.middleware.rate_limiter as rate_limiter_module
+
+    class FakeLimiter:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    middleware = rate_limiter_module.RateLimitMiddleware(
+        app=lambda scope, receive, send: None,
+        rate_limiter=None,
+        enabled=False,
+        trust_proxy=True,
+    )
+    limiter = FakeLimiter()
+    middleware.rate_limiter = limiter
+
+    await rate_limiter_module.close_rate_limit_middleware()
+
+    assert limiter.closed is True

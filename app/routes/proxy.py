@@ -19,8 +19,12 @@ logger = get_logger()
 SENSITIVE_HEADERS = {"cookie", "set-cookie"}
 
 
-def _strip_hop_headers(h: dict) -> dict:
-    return {k: v for k, v in h.items() if k.lower() not in HOP_HEADERS}
+def _strip_hop_headers(headers: httpx.Headers) -> list[tuple[bytes, bytes]]:
+    return [
+        (key.lower(), value)
+        for key, value in headers.raw
+        if key.decode("latin-1").lower() not in HOP_HEADERS
+    ]
 
 
 def _sanitize_headers_for_log(headers: dict) -> dict:
@@ -253,11 +257,12 @@ async def _proxy_request(
                         pass
 
             returned = True
-            return StreamingResponse(
+            response = StreamingResponse(
                 byte_iter(),
                 status_code=resp.status_code,
-                headers=_strip_hop_headers(resp.headers),
             )
+            response.raw_headers = _strip_hop_headers(resp.headers)
+            return response
 
         except TRANSIENT_EXC as e:
             if entered and resp_cm is not None and not returned:
