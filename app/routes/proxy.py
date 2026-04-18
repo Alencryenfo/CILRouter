@@ -6,7 +6,7 @@ from typing import AsyncIterator
 import anyio
 import httpx
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.auth import is_passthrough_models_request, should_use_provider_authorization
 from app.config import config
@@ -17,6 +17,8 @@ from app.log.logger import get_logger
 router = APIRouter()
 logger = get_logger()
 SENSITIVE_HEADERS = {"cookie", "set-cookie"}
+CORS_ALLOW_METHODS = "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, TRACE"
+CORS_FALLBACK_ALLOW_HEADERS = "Authorization, Content-Type"
 
 
 def _strip_hop_headers(headers: httpx.Headers) -> list[tuple[bytes, bytes]]:
@@ -41,6 +43,28 @@ def _log_body_preview(level: int, message: str, *, IP: str, trace_id: str, info:
     logger.info(message, IP=IP, trace_id=trace_id, 信息=info, **fields)
 
 
+def _build_preflight_response(request: Request) -> Response:
+    origin = request.headers.get("origin")
+    requested_headers = request.headers.get("access-control-request-headers")
+
+    response_headers = {
+        "Access-Control-Allow-Origin": origin or "*",
+        "Access-Control-Allow-Methods": CORS_ALLOW_METHODS,
+        "Access-Control-Allow-Headers": requested_headers or CORS_FALLBACK_ALLOW_HEADERS,
+        "Access-Control-Max-Age": "600",
+    }
+
+    vary_values = []
+    if origin:
+        vary_values.append("Origin")
+    if requested_headers:
+        vary_values.append("Access-Control-Request-Headers")
+    if vary_values:
+        response_headers["Vary"] = ", ".join(vary_values)
+
+    return Response(status_code=204, headers=response_headers)
+
+
 @router.api_route(
     "/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "TRACE"],
@@ -49,8 +73,18 @@ async def forward_request(path: str, request: Request):
     """通用透明转发，支持流式响应。"""
     IP = getattr(request.state, "ip", "unknown-client")
     trace_id = getattr(request.state, "trace_id", "")
+    method = request.method.upper()
     logger.info(f"IP:{IP}访问端点 /{path}", IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path}")
     try:
+        if method == "OPTIONS":
+            logger.info(
+                f"IP:{IP}访问端点 /{path}➡️处理浏览器预检请求，本地直接返回204",
+                IP=IP,
+                trace_id=trace_id,
+                信息=f"访问端点 /{path} 处理浏览器预检请求",
+            )
+            return _build_preflight_response(request)
+
         passthrough = is_passthrough_models_request(path)
         incoming_authorization = request.headers.get("authorization", "").strip()
         auth_keys = config.get_request_config()["AUTH_KEYS"]
@@ -62,7 +96,6 @@ async def forward_request(path: str, request: Request):
             trace_id=trace_id,
         )
 
-        method = request.method.upper()
         query_params = str(request.url.query)
 
         # 清洗请求头
