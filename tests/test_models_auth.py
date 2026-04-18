@@ -49,7 +49,7 @@ logging:
     yield main
 
 
-def test_models_request_without_authorization_skips_upstream_auth(main_module, monkeypatch):
+def test_models_request_without_authorization_uses_upstream_auth(main_module, monkeypatch):
     captured = {}
 
     async def fake_proxy_request(*args, **kwargs):
@@ -64,7 +64,7 @@ def test_models_request_without_authorization_skips_upstream_auth(main_module, m
         response = client.get("/v1/models")
 
     assert response.status_code == 204
-    assert captured["use_provider_authorization"] is False
+    assert captured["use_provider_authorization"] is True
 
 
 def test_models_request_with_valid_authorization_keeps_default_upstream_auth(main_module, monkeypatch):
@@ -85,12 +85,11 @@ def test_models_request_with_valid_authorization_keeps_default_upstream_auth(mai
     assert captured["use_provider_authorization"] is True
 
 
-def test_models_request_with_invalid_authorization_is_rejected(main_module, monkeypatch):
-    called = False
+def test_models_request_with_invalid_authorization_is_allowed(main_module, monkeypatch):
+    captured = {}
 
     async def fake_proxy_request(*args, **kwargs):
-        nonlocal called
-        called = True
+        captured.update(kwargs)
         return Response(status_code=204)
 
     import app.routes.proxy as proxy_module
@@ -100,9 +99,8 @@ def test_models_request_with_invalid_authorization_is_rejected(main_module, monk
     with TestClient(main_module.app) as client:
         response = client.get("/v1/models", headers={"Authorization": "Bearer wrong-auth"})
 
-    assert response.status_code == 401
-    assert response.json()["detail"]["信息"] == "令牌无效"
-    assert called is False
+    assert response.status_code == 204
+    assert captured["use_provider_authorization"] is True
 
 
 def test_non_models_request_without_authorization_is_rejected(main_module, monkeypatch):
@@ -125,12 +123,11 @@ def test_non_models_request_without_authorization_is_rejected(main_module, monke
     assert called is False
 
 
-def test_models_request_with_bad_authorization_scheme_is_rejected(main_module, monkeypatch):
-    called = False
+def test_models_request_with_bad_authorization_scheme_is_allowed(main_module, monkeypatch):
+    captured = {}
 
     async def fake_proxy_request(*args, **kwargs):
-        nonlocal called
-        called = True
+        captured.update(kwargs)
         return Response(status_code=204)
 
     import app.routes.proxy as proxy_module
@@ -140,9 +137,8 @@ def test_models_request_with_bad_authorization_scheme_is_rejected(main_module, m
     with TestClient(main_module.app) as client:
         response = client.get("/v1/models", headers={"Authorization": "Token local-auth"})
 
-    assert response.status_code == 401
-    assert response.json()["detail"]["信息"] == "鉴权格式错误，应为 Bearer <token>"
-    assert called is False
+    assert response.status_code == 204
+    assert captured["use_provider_authorization"] is True
 
 
 def test_set_provider_index_syncs_back_to_config_file(tmp_path, monkeypatch):

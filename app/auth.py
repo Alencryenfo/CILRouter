@@ -10,7 +10,7 @@ logger = get_logger()
 
 
 def is_passthrough_models_request(path: str) -> bool:
-    """识别允许缺失令牌直通的 /v1/models 请求。"""
+    """识别允许免鉴权访问的 /v1/models 请求。"""
     return path.strip("/") == "v1/models"
 
 
@@ -36,19 +36,17 @@ def should_use_provider_authorization(
     决定是否为上游补充供应商 Authorization。
 
     规则：
-    - 无 auth_keys 配置：不校验，直通（/v1/models 缺 token 时不带上游 Authorization）。
-    - 普通接口：必须携带合法 Bearer 令牌，通过后注入上游 Authorization。
-    - /v1/models 缺 token：允许直通，但不带上游 Authorization。
-    - /v1/models 有 token：仍需通过本地校验，通过后沿用默认上游鉴权。
+    - /v1/models：客户端无需携带令牌，始终使用供应商 Authorization 请求上游。
+    - 其他接口且无 auth_keys 配置：不校验，使用供应商 Authorization 请求上游。
+    - 其他接口：必须携带合法 Bearer 令牌，通过后注入上游 Authorization。
     """
-    passthrough = is_passthrough_models_request(path)
+    if is_passthrough_models_request(path):
+        return True
 
     if not auth_keys:
-        return not (passthrough and not incoming_authorization)
+        return True
 
     if not incoming_authorization:
-        if passthrough:
-            return False
         _reject(path, IP, trace_id, "缺少Bearer令牌", "缺少鉴权令牌")
 
     if not incoming_authorization.lower().startswith("bearer "):

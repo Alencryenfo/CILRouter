@@ -70,14 +70,8 @@ async def forward_request(path: str, request: Request):
         headers = {k: v for k, v in headers.items() if not k.lower().startswith(("cf-", "cf-access-"))}
 
         if passthrough:
-            if not use_provider_authorization:
-                msg = "缺失令牌，允许直通且不带上游Authorization"
-            elif auth_keys and incoming_authorization:
-                msg = "令牌校验通过，沿用默认上游鉴权"
-            else:
-                msg = "沿用默认上游鉴权"
             logger.info(
-                f"IP:{IP}访问端点 /{path}➡️特殊路由: {msg}",
+                f"IP:{IP}访问端点 /{path}➡️特殊路由: 免鉴权访问，自动使用供应商鉴权请求上游",
                 IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 特殊路由处理",
             )
 
