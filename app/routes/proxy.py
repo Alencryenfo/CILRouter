@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import Response, StreamingResponse
 
-from app.auth import is_passthrough_models_request, should_use_provider_authorization
+from app.auth import format_auth_header_name, is_passthrough_models_request, resolve_upstream_auth_header
 from app.config import config
 from app.constants import HOP_HEADERS, PROHIBIT_HEADERS, TRANSIENT_EXC
 from app.http_client.http_pool import get_client_for
@@ -18,7 +18,7 @@ router = APIRouter()
 logger = get_logger()
 SENSITIVE_HEADERS = {"cookie", "set-cookie"}
 CORS_ALLOW_METHODS = "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS, TRACE"
-CORS_FALLBACK_ALLOW_HEADERS = "Authorization, Content-Type"
+CORS_FALLBACK_ALLOW_HEADERS = "Authorization, X-API-Key, Content-Type"
 
 
 def _strip_hop_headers(headers: httpx.Headers) -> list[tuple[bytes, bytes]]:
@@ -87,10 +87,12 @@ async def forward_request(path: str, request: Request):
 
         passthrough = is_passthrough_models_request(path)
         incoming_authorization = request.headers.get("authorization", "").strip()
+        incoming_x_api_key = request.headers.get("x-api-key", "").strip()
         auth_keys = config.get_request_config()["AUTH_KEYS"]
-        use_provider_authorization = should_use_provider_authorization(
+        upstream_auth_header = resolve_upstream_auth_header(
             path=path,
             incoming_authorization=incoming_authorization,
+            incoming_x_api_key=incoming_x_api_key,
             auth_keys=auth_keys,
             IP=IP,
             trace_id=trace_id,
@@ -104,7 +106,8 @@ async def forward_request(path: str, request: Request):
 
         if passthrough:
             logger.info(
-                f"IP:{IP}访问端点 /{path}➡️特殊路由: 免鉴权访问，自动使用供应商鉴权请求上游",
+                f"IP:{IP}访问端点 /{path}➡️特殊路由: 免鉴权访问，自动使用供应商"
+                f"{format_auth_header_name(upstream_auth_header)}请求上游",
                 IP=IP, trace_id=trace_id, 信息=f"访问端点 /{path} 特殊路由处理",
             )
 
@@ -157,7 +160,7 @@ async def forward_request(path: str, request: Request):
             method, path, query_params, headers, body_stream,
             allow_retries=not has_body,
             IP=IP, trace_id=trace_id,
-            use_provider_authorization=use_provider_authorization,
+            upstream_auth_header=upstream_auth_header,
         )
 
     except HTTPException:
@@ -185,7 +188,7 @@ async def _proxy_request(
     allow_retries: bool,
     IP: str,
     trace_id: str,
-    use_provider_authorization: bool,
+    upstream_auth_header: str,
 ):
     last_exc = None
     attempts = 3 if allow_retries else 1
@@ -206,19 +209,17 @@ async def _proxy_request(
             url = f"{url}?{query_params}"
 
         up_headers = dict(headers)
-        if use_provider_authorization:
-            logger.info(
-                f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Authorization: 供应商鉴权",
-                IP=IP, trace_id=trace_id,
-                信息=f"访问端点 /{path} 转发请求分配端点: {base_url}，使用供应商鉴权",
-            )
+        upstream_auth_header_display = format_auth_header_name(upstream_auth_header)
+        logger.info(
+            f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，"
+            f"{upstream_auth_header_display}: 供应商鉴权",
+            IP=IP, trace_id=trace_id,
+            信息=f"访问端点 /{path} 转发请求分配端点: {base_url}，使用供应商鉴权",
+        )
+        if upstream_auth_header == "authorization":
             up_headers["authorization"] = f"Bearer {ep['api_key']}"
         else:
-            logger.info(
-                f"IP:{IP}访问端点 /{path}➡️转发请求分配端点: {base_url}，Authorization: 不携带",
-                IP=IP, trace_id=trace_id,
-                信息=f"访问端点 /{path} 转发请求分配端点: {base_url}",
-            )
+            up_headers["x-api-key"] = ep["api_key"]
         up_headers["accept-encoding"] = "identity"
 
         client = await get_client_for(base_url)

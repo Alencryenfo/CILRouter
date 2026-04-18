@@ -9,8 +9,11 @@ APP_NAME = "CIL Router"
 APP_VERSION = "2.0.0"
 
 PROHIBIT_HEADERS = frozenset({
-    # 逐跳 / 连接管理
+    # 由代理统一重写的鉴权头
     "authorization",
+    "x-api-key",
+
+    # 逐跳 / 连接管理
     "host",
     "connection",
     "keep-alive",
@@ -36,8 +39,6 @@ PROHIBIT_HEADERS = frozenset({
     "via",
     "forwarded",
 
-    # x-api-key（交给 httpx 自己处理）
-    "x-api-key",
 })
 
 HOP_HEADERS = frozenset((
