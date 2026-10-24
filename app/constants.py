@@ -43,7 +43,7 @@ PROHIBIT_HEADERS = frozenset({
 
 HOP_HEADERS = frozenset((
     "transfer-encoding", "connection", "keep-alive",
-    "proxy-connection", "upgrade", "te", "trailer", "content-encoding",
+    "proxy-connection", "upgrade", "te", "trailer",
 ))
 
 TRANSIENT_EXC = (

@@ -8,7 +8,7 @@
 
 [English](README_EN.md) | 简体中文
 
-> 当前文档对应版本 `v2.0.0`。
+> 当前文档对应 `v2` 分支（`v2.0.0`），使用 `config.yaml`。旧版 `.env` 配置请参阅 [Production 分支](https://github.com/Alencryenfo/CILRouter/tree/Production)；默认 `master` 分支不是本指南的代码版本。
 
 ## 项目定位
 
@@ -25,7 +25,7 @@ CIL Router 适合这类场景：
 
 - 透明转发常见 HTTP 方法：`GET`、`POST`、`PUT`、`DELETE`、`PATCH`、`HEAD`、`OPTIONS`、`TRACE`
 - 自动把客户端请求转发到当前供应商的对应路径
-- 自动注入上游 `Authorization: Bearer <provider_api_key>`
+- 根据客户端鉴权头类型注入上游 `Authorization: Bearer <provider_api_key>` 或 `X-API-Key: <provider_api_key>`
 - 支持流式响应透传
 - 支持同一供应商下多个端点轮询
 - 支持 `POST /select` 手动切换当前供应商
@@ -89,7 +89,7 @@ POST http://localhost:8000/v1/messages
 ### 方式一：Docker Compose
 
 ```bash
-git clone https://github.com/Alencryenfo/CILRouter.git
+git clone --branch v2 https://github.com/Alencryenfo/CILRouter.git
 cd CILRouter
 ```
 
@@ -129,7 +129,7 @@ curl http://localhost:8000/
 ### 方式二：本地运行
 
 ```bash
-git clone https://github.com/Alencryenfo/CILRouter.git
+git clone --branch v2 https://github.com/Alencryenfo/CILRouter.git
 cd CILRouter
 python -m venv .venv
 source .venv/bin/activate
@@ -223,18 +223,20 @@ logging:
 
 `auth.keys` 保护的是“客户端访问路由器”这一步，不是上游供应商。
 
-启用后，客户端必须带：
+启用后，普通转发请求的客户端可以携带以下任一种鉴权头：
 
 ```http
 Authorization: Bearer <auth.keys 中任意一个 token>
 ```
 
-然后路由器会在转发时把这个头替换成当前供应商的真实 API Key。
+或者 `X-API-Key: <auth.keys 中任意一个 token>`。同时携带两种头时优先校验 `Authorization`；路由器只将所选头类型与当前供应商的真实 API Key 发往上游，不透传客户端令牌。
 
 当前实现中，`auth.keys` 只会应用在通用转发接口上，不会拦截：
 
 - `GET /`
 - `POST /select`
+- `/v1/models`（所有已支持方法，使用供应商鉴权访问上游）
+- `OPTIONS` 预检请求（本地返回 204）
 
 如果服务暴露到公网，建议在反向代理层额外限制 `/select`。
 
@@ -267,3 +269,14 @@ curl http://localhost:8000/v1/models
 curl -X POST http://localhost:8000/v1/messages
 curl -X GET "http://localhost:8000/some/path?foo=bar"
 ```
+
+## 开发与测试
+
+在 `v2` 分支的项目根目录运行：
+
+```bash
+python -m pip install -r requirements.txt
+python -m pytest -q
+```
+
+测试使用本地模拟上游，无需真实 API Key，覆盖鉴权选择、客户端令牌替换、配置切换和响应流字节/头一致性。它们不是对真实供应商或生产部署的端到端验证。

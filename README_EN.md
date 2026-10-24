@@ -8,7 +8,7 @@ A lightweight, transparent Claude Code / Anthropic-style API forwarder built aro
 
 English | [简体中文](README.md)
 
-> This document targets version `v2.0.0`.
+> This document targets the `v2` branch (`v2.0.0`), which uses `config.yaml`. For the older `.env` configuration, see [Production](https://github.com/Alencryenfo/CILRouter/tree/Production). The default `master` branch is not the code described by this guide.
 
 ## What It Is For
 
@@ -25,7 +25,7 @@ It is not an SDK and not a full gateway. It is a small proxy layer focused on tr
 
 - Transparent forwarding for common HTTP methods: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`, `TRACE`
 - Automatic forwarding to the matching path on the current provider
-- Automatic upstream `Authorization: Bearer <provider_api_key>` injection
+- Upstream `Authorization: Bearer <provider_api_key>` or `X-API-Key: <provider_api_key>` injection according to the client authentication header type
 - Streaming response passthrough
 - Round-robin selection across multiple endpoints inside one provider group
 - Manual provider-group switching via `POST /select`
@@ -89,7 +89,7 @@ Important details:
 ### Option 1: Docker Compose
 
 ```bash
-git clone https://github.com/Alencryenfo/CILRouter.git
+git clone --branch v2 https://github.com/Alencryenfo/CILRouter.git
 cd CILRouter
 ```
 
@@ -129,7 +129,7 @@ Notes:
 ### Option 2: Local Run
 
 ```bash
-git clone https://github.com/Alencryenfo/CILRouter.git
+git clone --branch v2 https://github.com/Alencryenfo/CILRouter.git
 cd CILRouter
 python -m venv .venv
 source .venv/bin/activate
@@ -217,18 +217,20 @@ If you want the change to persist, edit `config.yaml` manually and restart the s
 
 `auth.keys` protects access to the router itself, not the upstream provider.
 
-When enabled, clients must send:
+When enabled, clients on ordinary forwarding routes can send either authentication header:
 
 ```http
 Authorization: Bearer <any token from auth.keys>
 ```
 
-The router then replaces that header with the real provider API key before forwarding upstream.
+Alternatively, send `X-API-Key: <any token from auth.keys>`. If both headers are present, `Authorization` takes precedence. Only the selected header type with the provider API key is sent upstream; client credentials are not forwarded.
 
 In the current implementation, `auth.keys` is only enforced on the generic forwarding route. It does not protect:
 
 - `GET /`
 - `POST /select`
+- `/v1/models` (all supported methods; uses provider authentication upstream)
+- `OPTIONS` preflight requests (returns 204 locally)
 
 If you expose the service publicly, restrict `/select` at the reverse-proxy layer.
 
@@ -261,3 +263,14 @@ curl http://localhost:8000/v1/models
 curl -X POST http://localhost:8000/v1/messages
 curl -X GET "http://localhost:8000/some/path?foo=bar"
 ```
+
+## Development and Tests
+
+Run from the repository root on the `v2` branch:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pytest -q
+```
+
+Tests use a local mock upstream without real API keys. They cover authentication selection, client credential replacement, configuration switching, and response stream byte/header consistency. They are not end-to-end validation of real providers or production deployments.

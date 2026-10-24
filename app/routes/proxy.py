@@ -242,7 +242,8 @@ async def _proxy_request(
                     first = b""
                     last = b""
                     length = 0
-                    async for chunk in resp.aiter_bytes():
+                    # Keep encoded bytes consistent with Content-Encoding/Content-Length.
+                    async for chunk in resp.aiter_raw():
                         if not first and chunk:
                             first = chunk[:200]
                         last = (last + chunk)[-200:]
